@@ -19,7 +19,10 @@ Define your packages in a `registry.json` file, then run `generate` to produce a
   - [Commands](#commands)
     - [Add a package](#add-a-package)
     - [Add a version](#add-a-version)
+    - [Add a dependency](#add-a-dependency)
+    - [Set xmake config](#set-xmake-config)
     - [List packages](#list-packages)
+    - [Remove a dependency](#remove-a-dependency)
     - [Remove a version](#remove-a-version)
     - [Remove a package](#remove-a-package)
     - [Generate registry files](#generate-registry-files)
@@ -135,7 +138,12 @@ This is the source of truth. All commands (except `generate`) just edit this fil
   "packages": {
     "some-library": {
       "repo": "your-user/some-library",
-      "versions": ["v1.0.0", "v2.0.0"]
+      "versions": ["v1.0.0", "v2.0.0"],
+      "dependencies": [
+        "spdlog",
+        {"name": "boost", "configs": {"filesystem": true, "program_options": true}}
+      ],
+      "xmake-config": {"build_tests": false}
     },
     "header-only-lib": {
       "repo": "your-user/header-only-lib",
@@ -155,8 +163,9 @@ This is the source of truth. All commands (except `generate`) just edit this fil
 | `branch` | no | Git branch to track (default: repo default branch) |
 | `registries` | no | `["vcpkg", "xmake"]` (default: both) |
 | `header-only` | no | `true` for header-only libraries |
-| `dependencies` | no | List of package dependencies |
-| `options` | no | CMake options (e.g. `["BUILD_TESTS=OFF"]`) |
+| `dependencies` | no | List of deps — strings or objects with `name` + `configs` |
+| `xmake-config` | no | Config table passed to `xmake.install()` (e.g. `{"build_tests": false}`) |
+| `options` | no | CMake options for vcpkg (e.g. `["BUILD_TESTS=OFF"]`) |
 
 ## Commands
 
@@ -174,6 +183,30 @@ python registry.py add some-library your-user/some-library --registries vcpkg,xm
 ```sh
 python registry.py add-version some-library v1.0.0
 python registry.py add-version some-library --latest   # fetches latest tag from GitHub
+```
+
+### Add a dependency
+
+```sh
+python registry.py add-dep some-library spdlog
+python registry.py add-dep some-library boost filesystem=true program_options=true
+```
+
+Dependencies without `key=value` pairs are added as simple strings. With `key=value` pairs, they become objects with a `configs` table — these map to xmake's `add_deps("boost", { configs = { filesystem = true } })` syntax.
+
+### Set xmake config
+
+```sh
+python registry.py set-config some-library build_tests=false
+python registry.py set-config some-library build_tests=false build_examples=false
+```
+
+These values are passed to `import("package.tools.xmake").install(package, { ... })` in the generated `xmake.lua`.
+
+### Remove a dependency
+
+```sh
+python registry.py remove-dep some-library spdlog
 ```
 
 ### List packages

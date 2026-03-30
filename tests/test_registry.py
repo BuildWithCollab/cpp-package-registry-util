@@ -4,13 +4,17 @@ import pytest
 from assertpy import assert_that
 
 from registry import (
+    add_dependency,
     add_package,
     add_version,
     list_packages,
     load_registry,
+    parse_kv_pair,
+    remove_dependency,
     remove_package,
     remove_version,
     save_registry,
+    set_config,
 )
 
 
@@ -260,3 +264,135 @@ class TestCLI:
 
         data = json.loads(registry_file.read_text())
         assert_that(data["packages"]["my-lib"]["registries"]).is_equal_to(["vcpkg"])
+
+    def test_add_dep_simple_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "add-dep", "my-lib", "spdlog"])
+
+        data = json.loads(registry_file.read_text())
+        assert_that(data["packages"]["my-lib"]["dependencies"]).is_equal_to(["spdlog"])
+
+    def test_add_dep_with_configs_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "add-dep", "my-lib", "boost", "filesystem=true", "container=false"])
+
+        data = json.loads(registry_file.read_text())
+        dep = data["packages"]["my-lib"]["dependencies"][0]
+        assert_that(dep["name"]).is_equal_to("boost")
+        assert_that(dep["configs"]["filesystem"]).is_true()
+        assert_that(dep["configs"]["container"]).is_false()
+
+    def test_remove_dep_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "add-dep", "my-lib", "spdlog"])
+        main(["-f", str(registry_file), "remove-dep", "my-lib", "spdlog"])
+
+        data = json.loads(registry_file.read_text())
+        assert_that(data["packages"]["my-lib"]).does_not_contain_key("dependencies")
+
+    def test_set_config_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "set-config", "my-lib", "build_tests=false"])
+
+        data = json.loads(registry_file.read_text())
+        assert_that(data["packages"]["my-lib"]["xmake-config"]["build_tests"]).is_false()
+
+    def test_set_config_multiple_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "set-config", "my-lib", "build_tests=false", "build_examples=false"])
+
+        data = json.loads(registry_file.read_text())
+        assert_that(data["packages"]["my-lib"]["xmake-config"]["build_tests"]).is_false()
+        assert_that(data["packages"]["my-lib"]["xmake-config"]["build_examples"]).is_false()
+
+
+# --- parse_kv_pair ---
+
+
+class TestParseKvPair:
+    def test_bool_true(self):
+        assert_that(parse_kv_pair("foo=true")).is_equal_to(("foo", True))
+
+    def test_bool_false(self):
+        assert_that(parse_kv_pair("foo=false")).is_equal_to(("foo", False))
+
+    def test_int(self):
+        assert_that(parse_kv_pair("count=42")).is_equal_to(("count", 42))
+
+    def test_string(self):
+        assert_that(parse_kv_pair("name=hello")).is_equal_to(("name", "hello"))
+
+    def test_no_equals_is_true(self):
+        assert_that(parse_kv_pair("flag")).is_equal_to(("flag", True))
+
+
+# --- add_dependency ---
+
+
+class TestAddDependency:
+    def test_add_simple(self, registry_with_one_package):
+        data = add_dependency(registry_with_one_package, "some-lib", "spdlog")
+        assert_that(data["packages"]["some-lib"]["dependencies"]).is_equal_to(["spdlog"])
+
+    def test_add_with_configs(self, registry_with_one_package):
+        data = add_dependency(registry_with_one_package, "some-lib", "boost", configs={"filesystem": True})
+        dep = data["packages"]["some-lib"]["dependencies"][0]
+        assert_that(dep["name"]).is_equal_to("boost")
+        assert_that(dep["configs"]["filesystem"]).is_true()
+
+    def test_add_duplicate_exits(self, registry_with_one_package):
+        add_dependency(registry_with_one_package, "some-lib", "spdlog")
+        with pytest.raises(SystemExit):
+            add_dependency(registry_with_one_package, "some-lib", "spdlog")
+
+    def test_add_to_nonexistent_exits(self, empty_registry):
+        with pytest.raises(SystemExit):
+            add_dependency(empty_registry, "nope", "spdlog")
+
+
+# --- remove_dependency ---
+
+
+class TestRemoveDependency:
+    def test_remove_simple(self, registry_with_one_package):
+        add_dependency(registry_with_one_package, "some-lib", "spdlog")
+        data = remove_dependency(registry_with_one_package, "some-lib", "spdlog")
+        assert_that(data["packages"]["some-lib"]).does_not_contain_key("dependencies")
+
+    def test_remove_leaves_others(self, registry_with_one_package):
+        add_dependency(registry_with_one_package, "some-lib", "spdlog")
+        add_dependency(registry_with_one_package, "some-lib", "fmt")
+        data = remove_dependency(registry_with_one_package, "some-lib", "spdlog")
+        assert_that(data["packages"]["some-lib"]["dependencies"]).is_equal_to(["fmt"])
+
+    def test_remove_nonexistent_exits(self, registry_with_one_package):
+        with pytest.raises(SystemExit):
+            remove_dependency(registry_with_one_package, "some-lib", "nope")
+
+
+# --- set_config ---
+
+
+class TestSetConfig:
+    def test_set_config(self, registry_with_one_package):
+        data = set_config(registry_with_one_package, "some-lib", "build_tests", False)
+        assert_that(data["packages"]["some-lib"]["xmake-config"]["build_tests"]).is_false()
+
+    def test_set_config_nonexistent_exits(self, empty_registry):
+        with pytest.raises(SystemExit):
+            set_config(empty_registry, "nope", "key", "val")
