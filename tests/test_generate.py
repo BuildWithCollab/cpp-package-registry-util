@@ -17,6 +17,8 @@ from registry import (
     vcpkg_baseline_file,
     vcpkg_version_string,
     xmake_package_dir,
+    _lua_value,
+    _format_xmake_dep,
 )
 
 
@@ -91,6 +93,29 @@ class TestVcpkgNaming:
 # --- generate_xmake_lua (uses literal name) ---
 
 
+class TestLuaHelpers:
+    def test_lua_value_bool(self):
+        assert_that(_lua_value(True)).is_equal_to("true")
+        assert_that(_lua_value(False)).is_equal_to("false")
+
+    def test_lua_value_string(self):
+        assert_that(_lua_value("hello")).is_equal_to('"hello"')
+
+    def test_lua_value_dict(self):
+        result = _lua_value({"a": True, "b": "x"})
+        assert_that(result).contains("a = true")
+        assert_that(result).contains('b = "x"')
+
+    def test_format_xmake_dep_string(self):
+        assert_that(_format_xmake_dep("spdlog")).contains('add_deps("spdlog")')
+
+    def test_format_xmake_dep_with_configs(self):
+        dep = {"name": "boost", "configs": {"filesystem": True}}
+        result = _format_xmake_dep(dep)
+        assert_that(result).contains('add_deps("boost"')
+        assert_that(result).contains("configs = { filesystem = true }")
+
+
 class TestGenerateXmakeLua:
     def test_basic_with_dashes(self):
         result = generate_xmake_lua(
@@ -134,20 +159,57 @@ class TestGenerateXmakeLua:
         )
         assert_that(result).contains('os.cp("include", package:installdir())')
 
-    def test_cmake_install(self):
+    def test_xmake_install_default(self):
         result = generate_xmake_lua(
             name="my-lib", repo="user/my-lib", description="desc",
             versions=[], version_hashes={}, header_only=False,
         )
-        assert_that(result).contains('import("package.tools.cmake").install(package)')
+        assert_that(result).contains('import("package.tools.xmake").install(package)')
+        assert_that(result).does_not_contain("cmake")
 
-    def test_dependencies_literal(self):
+    def test_xmake_install_with_config(self):
         result = generate_xmake_lua(
             name="my-lib", repo="user/my-lib", description="desc",
             versions=[], version_hashes={},
-            dependencies=["other-lib", "another_lib"],
+            xmake_config={"build_tests": False},
         )
-        assert_that(result).contains('add_deps("other-lib", "another_lib")')
+        assert_that(result).contains('import("package.tools.xmake").install(package, { build_tests = false })')
+
+    def test_license(self):
+        result = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=[], version_hashes={}, license="MIT",
+        )
+        assert_that(result).contains('set_license("MIT")')
+
+    def test_no_license_omits_line(self):
+        result = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=[], version_hashes={}, license="",
+        )
+        assert_that(result).does_not_contain("set_license")
+
+    def test_simple_dependencies(self):
+        result = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=[], version_hashes={},
+            dependencies=["spdlog", "nlohmann_json"],
+        )
+        assert_that(result).contains('add_deps("spdlog")')
+        assert_that(result).contains('add_deps("nlohmann_json")')
+
+    def test_rich_dependency_with_configs(self):
+        result = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=[], version_hashes={},
+            dependencies=[
+                "spdlog",
+                {"name": "boost", "configs": {"filesystem": True, "program_options": True}},
+            ],
+        )
+        assert_that(result).contains('add_deps("spdlog")')
+        assert_that(result).contains('add_deps("boost"')
+        assert_that(result).contains("filesystem = true")
 
 
 # --- generate_portfile_cmake ---
@@ -240,10 +302,10 @@ class TestGenerateVcpkgBaseline:
 # --- generate orchestrator (with fake fetch) ---
 
 
-def make_fake_fetch(description="A test library", sha256="fakehash123", commit_sha="abc123def456", commit_date="2024-06-15"):
+def make_fake_fetch(description="A test library", license="MIT", sha256="fakehash123", commit_sha="abc123def456", commit_date="2024-06-15"):
     def fake_fetch(kind, **kwargs):
-        if kind == "description":
-            return description
+        if kind == "repo_info":
+            return {"description": description, "license": license}
         elif kind == "tarball_sha256":
             return sha256
         elif kind == "commit_info":
@@ -287,6 +349,40 @@ class TestGenerateXmakeFiles:
         xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
         content = xmake_path.read_text()
         assert_that(content).contains('add_deps("other-lib")')
+
+    def test_xmake_config_passed(self, tmp_path):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["xmake"],
+                    "xmake-config": {"build_tests": False},
+                }
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
+        content = xmake_path.read_text()
+        assert_that(content).contains("build_tests = false")
+        assert_that(content).contains('import("package.tools.xmake")')
+
+    def test_license_included(self, tmp_path):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["xmake"],
+                }
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(license="0BSD"), commit=False)
+
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
+        content = xmake_path.read_text()
+        assert_that(content).contains('set_license("0BSD")')
 
     def test_header_only_xmake(self, tmp_path):
         data = {
@@ -481,11 +577,14 @@ class TestGenerateBothRegistries:
         assert_that(portfile.exists()).is_true()
 
     def test_multiple_packages(self, tmp_path):
-        descriptions = {"user/lib-a": "Library A", "user/lib-b": "Library B"}
+        repo_info = {
+            "user/lib-a": {"description": "Library A", "license": "MIT"},
+            "user/lib-b": {"description": "Library B", "license": "Apache-2.0"},
+        }
 
         def multi_fetch(kind, **kwargs):
-            if kind == "description":
-                return descriptions.get(kwargs["repo"], "desc")
+            if kind == "repo_info":
+                return repo_info.get(kwargs["repo"], {"description": "desc", "license": ""})
             elif kind == "tarball_sha256":
                 return "hash_" + kwargs["version"]
             elif kind == "commit_info":

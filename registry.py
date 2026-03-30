@@ -181,11 +181,14 @@ def get_latest_tag(repo: str) -> str:
     return tags[0]["name"]
 
 
-def get_repo_description(repo: str) -> str:
+def get_repo_info(repo: str) -> dict:
     data = _github_fetch_json(
         f"https://api.github.com/repos/{repo}", context=repo
     )
-    return data.get("description") or ""
+    return {
+        "description": data.get("description") or "",
+        "license": (data.get("license") or {}).get("spdx_id") or "",
+    }
 
 
 def get_commit_info_for_ref(repo: str, ref: str) -> dict:
@@ -242,19 +245,47 @@ def xmake_package_dir(root: Path, name: str) -> Path:
     return root / "packages" / name[0].lower() / name
 
 
+def _lua_value(val) -> str:
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, str):
+        return f'"{val}"'
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, dict):
+        pairs = ", ".join(f"{k} = {_lua_value(v)}" for k, v in val.items())
+        return "{ " + pairs + " }"
+    return str(val)
+
+
+def _format_xmake_dep(dep) -> str:
+    if isinstance(dep, str):
+        return f'    add_deps("{dep}")'
+    name = dep["name"]
+    configs = dep.get("configs", {})
+    if configs:
+        return f'    add_deps("{name}", {{ configs = {_lua_value(configs)} }})'
+    return f'    add_deps("{name}")'
+
+
 def generate_xmake_lua(
     name: str,
     repo: str,
     description: str,
     versions: list[str],
     version_hashes: dict[str, str],
-    dependencies: list[str] | None = None,
+    dependencies: list | None = None,
     header_only: bool = False,
+    license: str = "",
+    xmake_config: dict | None = None,
 ) -> str:
     lines = []
     lines.append(f'package("{name}")')
     lines.append(f'    set_homepage("https://github.com/{repo}")')
     lines.append(f'    set_description("{description}")')
+    if license:
+        lines.append(f'    set_license("{license}")')
+
     lines.append(f'    add_urls("https://github.com/{repo}/archive/refs/tags/$(version).tar.gz")')
 
     for version in versions:
@@ -262,8 +293,8 @@ def generate_xmake_lua(
         lines.append(f'    add_versions("{version}", "{sha}")')
 
     if dependencies:
-        dep_names = ", ".join(f'"{d}"' for d in dependencies)
-        lines.append(f"    add_deps({dep_names})")
+        for dep in dependencies:
+            lines.append(_format_xmake_dep(dep))
 
     if header_only:
         lines.append('    on_install(function (package)')
@@ -271,7 +302,11 @@ def generate_xmake_lua(
         lines.append('    end)')
     else:
         lines.append('    on_install(function (package)')
-        lines.append('        import("package.tools.cmake").install(package)')
+        if xmake_config:
+            config_str = _lua_value(xmake_config)
+            lines.append(f'        import("package.tools.xmake").install(package, {config_str})')
+        else:
+            lines.append('        import("package.tools.xmake").install(package)')
         lines.append('    end)')
 
     return "\n".join(lines) + "\n"
@@ -410,11 +445,16 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
 
         print(f"--- {name} ---")
 
-        description = fetch_fn("description", repo=repo)
+        repo_info = fetch_fn("repo_info", repo=repo)
+        description = repo_info["description"]
+        license_id = repo_info["license"]
+
+        xmake_config = pkg.get("xmake-config", {})
 
         if "xmake" in registries:
             _generate_xmake(
-                root, name, repo, description, versions, dependencies, header_only, fetch_fn
+                root, name, repo, description, versions, dependencies,
+                header_only, fetch_fn, license_id, xmake_config,
             )
 
         if "vcpkg" in registries:
@@ -432,7 +472,7 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
             git_exec(["add", str(baseline_path)], working_dir)
 
 
-def _generate_xmake(root, name, repo, description, versions, dependencies, header_only, fetch_fn):
+def _generate_xmake(root, name, repo, description, versions, dependencies, header_only, fetch_fn, license_id="", xmake_config=None):
     version_hashes = {}
     for version in versions:
         print(f"  xmake: fetching SHA256 for {version}...")
@@ -442,6 +482,7 @@ def _generate_xmake(root, name, repo, description, versions, dependencies, heade
     xmake_lua = generate_xmake_lua(
         name, repo, description, versions, version_hashes,
         dependencies=dependencies, header_only=header_only,
+        license=license_id, xmake_config=xmake_config,
     )
 
     pkg_dir = xmake_package_dir(root, name)
@@ -520,8 +561,8 @@ def _generate_vcpkg(
 
 
 def _default_fetch(kind: str, **kwargs) -> str | dict:
-    if kind == "description":
-        return get_repo_description(kwargs["repo"])
+    if kind == "repo_info":
+        return get_repo_info(kwargs["repo"])
     elif kind == "tarball_sha256":
         return fetch_tarball_sha256(kwargs["repo"], kwargs["version"])
     elif kind == "commit_info":
