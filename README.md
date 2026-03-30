@@ -1,4 +1,4 @@
-# C++ Package Registry Util <!-- omit in toc -->
+# C++ Package Registry Util 🔨 <!-- omit in toc -->
 
 A single-file, zero-dependency Python tool for managing custom C++ package registries for both **xmake** and **vcpkg**.
 
