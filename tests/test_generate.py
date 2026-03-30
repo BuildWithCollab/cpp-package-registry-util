@@ -708,4 +708,29 @@ class TestGenerateIdempotent:
         # Second run: should reuse existing git-tree
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
         output = capsys.readouterr().out
-        assert_that(output).contains("already tracked")
+        assert_that(output).contains("no changes")
+
+    def test_vcpkg_regenerates_when_deps_change(self, tmp_path, capsys):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["vcpkg"],
+                    "dependencies": ["old-dep"],
+                }
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+
+        # Change deps and regenerate
+        data["packages"]["my-lib"]["dependencies"] = ["new-dep"]
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+        output = capsys.readouterr().out
+        assert_that(output).contains("port files changed")
+
+        # Verify the file was actually updated
+        vcpkg_json = tmp_path / "ports" / "my-lib" / "vcpkg.json"
+        pkg_data = json.loads(vcpkg_json.read_text())
+        assert_that(pkg_data["dependencies"]).contains("new-dep")
+        assert_that(pkg_data["dependencies"]).does_not_contain("old-dep")

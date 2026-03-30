@@ -599,24 +599,34 @@ def _generate_vcpkg(
         commit_info = fetch_fn("commit_info", repo=repo, ref=version)
         vs = vcpkg_version_string(commit_info["date"], commit_info["sha"])
 
-        # If this version-string already has a git-tree, reuse it
-        if vs in existing_versions:
-            print(f"  vcpkg: {vs} already tracked, reusing git-tree")
-            version_entries.append({"version-string": vs, "git-tree": existing_versions[vs]})
-            continue
-
-        # Generate port files for this version
+        # Always regenerate port files (deps or description may have changed)
         port_dir = vcpkg_port_dir(root, name)
         port_dir.mkdir(parents=True, exist_ok=True)
 
         portfile = generate_portfile_cmake(
             repo, commit_info["sha"], header_only=header_only, options=options,
         )
-        (port_dir / "portfile.cmake").write_text(portfile, encoding="utf-8")
+        portfile_path = port_dir / "portfile.cmake"
+        vcpkg_json_path = port_dir / "vcpkg.json"
 
-        vcpkg_json = generate_vcpkg_json(name, description, vs, dependencies)
-        with open(port_dir / "vcpkg.json", "w", encoding="utf-8") as f:
-            json.dump(vcpkg_json, f, indent=2)
+        new_portfile = portfile
+        new_vcpkg_json = json.dumps(generate_vcpkg_json(name, description, vs, dependencies), indent=2)
+
+        # Check if files actually changed
+        old_portfile = portfile_path.read_text(encoding="utf-8") if portfile_path.exists() else ""
+        old_vcpkg_json = vcpkg_json_path.read_text(encoding="utf-8") if vcpkg_json_path.exists() else ""
+        files_changed = (new_portfile != old_portfile) or (new_vcpkg_json != old_vcpkg_json)
+
+        portfile_path.write_text(new_portfile, encoding="utf-8")
+        vcpkg_json_path.write_text(new_vcpkg_json, encoding="utf-8")
+
+        if vs in existing_versions and not files_changed:
+            print(f"  vcpkg: {vs} already tracked, no changes")
+            version_entries.append({"version-string": vs, "git-tree": existing_versions[vs]})
+            continue
+
+        if vs in existing_versions and files_changed:
+            print(f"  vcpkg: {vs} port files changed, updating git-tree")
 
         pname = vcpkg_port_name(name)
         if commit:
