@@ -320,6 +320,39 @@ class TestCLI:
         assert_that(data["packages"]["my-lib"]["xmake-config"]["build_tests"]).is_false()
         assert_that(data["packages"]["my-lib"]["xmake-config"]["build_examples"]).is_false()
 
+    def test_add_dep_xmake_only_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "add-dep", "my-lib", "platformfolders", "--xmake"])
+
+        data = json.loads(registry_file.read_text())
+        assert_that(data["packages"]["my-lib"]).does_not_contain_key("dependencies")
+        assert_that(data["packages"]["my-lib"]["xmake-dependencies"]).is_equal_to(["platformfolders"])
+
+    def test_add_dep_vcpkg_only_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "add-dep", "my-lib", "platform-folders", "--vcpkg"])
+
+        data = json.loads(registry_file.read_text())
+        assert_that(data["packages"]["my-lib"]).does_not_contain_key("dependencies")
+        assert_that(data["packages"]["my-lib"]["vcpkg-dependencies"]).is_equal_to(["platform-folders"])
+
+    def test_remove_dep_xmake_only_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "add-dep", "my-lib", "platformfolders", "--xmake"])
+        main(["-f", str(registry_file), "remove-dep", "my-lib", "platformfolders", "--xmake"])
+
+        data = json.loads(registry_file.read_text())
+        assert_that(data["packages"]["my-lib"]).does_not_contain_key("xmake-dependencies")
+
 
 # --- parse_kv_pair ---
 

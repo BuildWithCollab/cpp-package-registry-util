@@ -556,6 +556,65 @@ class TestGenerateVcpkgFiles:
         assert_that(pkg_data["dependencies"]).contains("other-lib")
 
 
+class TestGenerateRegistrySpecificDeps:
+    def test_xmake_gets_common_plus_xmake_deps(self, tmp_path):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["xmake"],
+                    "dependencies": ["common-dep"],
+                    "xmake-dependencies": ["platformfolders"],
+                }
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
+        content = xmake_path.read_text()
+        assert_that(content).contains('add_deps("common-dep")')
+        assert_that(content).contains('add_deps("platformfolders")')
+
+    def test_vcpkg_gets_common_plus_vcpkg_deps(self, tmp_path):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["vcpkg"],
+                    "dependencies": ["common-dep"],
+                    "vcpkg-dependencies": ["platform-folders"],
+                }
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+
+        vcpkg_json = tmp_path / "ports" / "my-lib" / "vcpkg.json"
+        pkg_data = json.loads(vcpkg_json.read_text())
+        assert_that(pkg_data["dependencies"]).contains("common-dep")
+        assert_that(pkg_data["dependencies"]).contains("platform-folders")
+
+    def test_xmake_does_not_get_vcpkg_deps(self, tmp_path):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["xmake"],
+                    "dependencies": ["common-dep"],
+                    "vcpkg-dependencies": ["platform-folders"],
+                }
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
+        content = xmake_path.read_text()
+        assert_that(content).contains('add_deps("common-dep")')
+        assert_that(content).does_not_contain("platform-folders")
+
+
 class TestGenerateBothRegistries:
     def test_generates_both(self, tmp_path):
         data = {

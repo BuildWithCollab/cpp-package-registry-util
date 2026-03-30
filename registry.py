@@ -159,17 +159,25 @@ def parse_kv_pair(s: str):
     return key, val
 
 
-def add_dependency(data: dict, name: str, dep_name: str, configs: dict | None = None) -> dict:
+def _deps_key(registry: str | None = None) -> str:
+    if registry == "xmake":
+        return "xmake-dependencies"
+    if registry == "vcpkg":
+        return "vcpkg-dependencies"
+    return "dependencies"
+
+
+def add_dependency(data: dict, name: str, dep_name: str, configs: dict | None = None, registry: str | None = None) -> dict:
     packages = data.get("packages", {})
     if name not in packages:
         print(f"Package '{name}' not found.", file=sys.stderr)
         sys.exit(1)
-    deps = packages[name].setdefault("dependencies", [])
-    # Check if dep already exists
+    key = _deps_key(registry)
+    deps = packages[name].setdefault(key, [])
     for d in deps:
         existing_name = d if isinstance(d, str) else d["name"]
         if existing_name == dep_name:
-            print(f"Dependency '{dep_name}' already exists for '{name}'.", file=sys.stderr)
+            print(f"Dependency '{dep_name}' already exists in '{key}' for '{name}'.", file=sys.stderr)
             sys.exit(1)
     if configs:
         deps.append({"name": dep_name, "configs": configs})
@@ -178,12 +186,13 @@ def add_dependency(data: dict, name: str, dep_name: str, configs: dict | None = 
     return data
 
 
-def remove_dependency(data: dict, name: str, dep_name: str) -> dict:
+def remove_dependency(data: dict, name: str, dep_name: str, registry: str | None = None) -> dict:
     packages = data.get("packages", {})
     if name not in packages:
         print(f"Package '{name}' not found.", file=sys.stderr)
         sys.exit(1)
-    deps = packages[name].get("dependencies", [])
+    key = _deps_key(registry)
+    deps = packages[name].get(key, [])
     new_deps = []
     found = False
     for d in deps:
@@ -193,12 +202,12 @@ def remove_dependency(data: dict, name: str, dep_name: str) -> dict:
         else:
             new_deps.append(d)
     if not found:
-        print(f"Dependency '{dep_name}' not found for '{name}'.", file=sys.stderr)
+        print(f"Dependency '{dep_name}' not found in '{key}' for '{name}'.", file=sys.stderr)
         sys.exit(1)
     if new_deps:
-        packages[name]["dependencies"] = new_deps
+        packages[name][key] = new_deps
     else:
-        del packages[name]["dependencies"]
+        del packages[name][key]
     return data
 
 
@@ -511,7 +520,9 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
         registries = get_package_registries(pkg)
         repo = pkg["repo"]
         versions = pkg.get("versions", [])
-        dependencies = pkg.get("dependencies", [])
+        common_deps = pkg.get("dependencies", [])
+        xmake_deps = common_deps + pkg.get("xmake-dependencies", [])
+        vcpkg_deps = common_deps + pkg.get("vcpkg-dependencies", [])
         header_only = pkg.get("header-only", False)
         options = pkg.get("options", [])
 
@@ -525,13 +536,13 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
 
         if "xmake" in registries:
             _generate_xmake(
-                root, name, repo, description, versions, dependencies,
+                root, name, repo, description, versions, xmake_deps,
                 header_only, fetch_fn, license_id, xmake_config,
             )
 
         if "vcpkg" in registries:
             _generate_vcpkg(
-                root, name, repo, description, versions, dependencies,
+                root, name, repo, description, versions, vcpkg_deps,
                 header_only, options, fetch_fn, commit, working_dir, baseline_entries
             )
 
@@ -692,11 +703,17 @@ def build_parser() -> argparse.ArgumentParser:
     ad_parser.add_argument("name", help="Package name")
     ad_parser.add_argument("dep", help="Dependency name")
     ad_parser.add_argument("configs", nargs="*", help="Config key=value pairs (e.g. filesystem=true)")
+    ad_group = ad_parser.add_mutually_exclusive_group()
+    ad_group.add_argument("--xmake", action="store_true", help="Add as xmake-only dependency")
+    ad_group.add_argument("--vcpkg", action="store_true", help="Add as vcpkg-only dependency")
 
     # remove-dep
     rd_parser = subparsers.add_parser("remove-dep", help="Remove a dependency from a package.")
     rd_parser.add_argument("name", help="Package name")
     rd_parser.add_argument("dep", help="Dependency name to remove")
+    rd_group = rd_parser.add_mutually_exclusive_group()
+    rd_group.add_argument("--xmake", action="store_true", help="Remove from xmake-only dependencies")
+    rd_group.add_argument("--vcpkg", action="store_true", help="Remove from vcpkg-only dependencies")
 
     # set-config
     sc_parser = subparsers.add_parser("set-config", help="Set xmake-config values for a package.")
@@ -775,10 +792,12 @@ def main(argv: list[str] | None = None):
         for pair in (args.configs or []):
             k, v = parse_kv_pair(pair)
             configs[k] = v
-        add_dependency(data, args.name, args.dep, configs=configs or None)
+        reg = "xmake" if args.xmake else ("vcpkg" if args.vcpkg else None)
+        add_dependency(data, args.name, args.dep, configs=configs or None, registry=reg)
 
     elif args.command == "remove-dep":
-        remove_dependency(data, args.name, args.dep)
+        reg = "xmake" if args.xmake else ("vcpkg" if args.vcpkg else None)
+        remove_dependency(data, args.name, args.dep, registry=reg)
 
     elif args.command == "set-config":
         for pair in args.values:
