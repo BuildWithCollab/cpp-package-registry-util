@@ -43,12 +43,12 @@ VALID_REGISTRIES = ("vcpkg", "xmake")
 def load_registry(path: Path) -> dict:
     if not path.exists():
         return {"packages": {}}
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def save_registry(path: Path, data: dict) -> None:
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
 
@@ -389,7 +389,7 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
     # Load existing baseline if present
     baseline_path = vcpkg_baseline_file(root)
     if baseline_path.exists():
-        with open(baseline_path, "r") as f:
+        with open(baseline_path, "r", encoding="utf-8") as f:
             existing_baseline = json.load(f)
         baseline_entries = existing_baseline.get("default", {})
 
@@ -419,7 +419,7 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
     # Write baseline (all vcpkg packages)
     if baseline_entries:
         baseline_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_path, "w") as f:
+        with open(baseline_path, "w", encoding="utf-8") as f:
             json.dump({"default": baseline_entries}, f, indent=2)
         if commit:
             git_exec(["add", str(baseline_path)], working_dir)
@@ -440,7 +440,7 @@ def _generate_xmake(root, name, repo, description, versions, dependencies, heade
     pkg_dir = xmake_package_dir(root, name)
     pkg_dir.mkdir(parents=True, exist_ok=True)
     xmake_path = pkg_dir / "xmake.lua"
-    xmake_path.write_text(xmake_lua)
+    xmake_path.write_text(xmake_lua, encoding="utf-8")
     print(f"  xmake: wrote {xmake_path}")
 
 
@@ -456,7 +456,7 @@ def _generate_vcpkg(
     version_file = vcpkg_version_file(root, name)
     existing_versions = {}
     if version_file.exists():
-        with open(version_file, "r") as f:
+        with open(version_file, "r", encoding="utf-8") as f:
             vdata = json.load(f)
         for entry in vdata.get("versions", []):
             existing_versions[entry["version-string"]] = entry["git-tree"]
@@ -481,10 +481,10 @@ def _generate_vcpkg(
         portfile = generate_portfile_cmake(
             repo, commit_info["sha"], header_only=header_only, options=options,
         )
-        (port_dir / "portfile.cmake").write_text(portfile)
+        (port_dir / "portfile.cmake").write_text(portfile, encoding="utf-8")
 
         vcpkg_json = generate_vcpkg_json(name, description, vs, dependencies)
-        with open(port_dir / "vcpkg.json", "w") as f:
+        with open(port_dir / "vcpkg.json", "w", encoding="utf-8") as f:
             json.dump(vcpkg_json, f, indent=2)
 
         if commit:
@@ -501,7 +501,7 @@ def _generate_vcpkg(
     latest_vs = version_entries[-1]["version-string"]
     version_dir = vcpkg_version_dir(root, name)
     version_dir.mkdir(parents=True, exist_ok=True)
-    with open(version_file, "w") as f:
+    with open(version_file, "w", encoding="utf-8") as f:
         json.dump(generate_vcpkg_versions_json(version_entries), f, indent=2)
 
     if commit:
