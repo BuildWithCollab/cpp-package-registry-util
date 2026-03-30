@@ -13,6 +13,7 @@ Define your packages in a `registry.json` file, then run `generate` to produce a
     - [vcpkg.json](#vcpkgjson)
     - [Updating the Baseline](#updating-the-baseline)
 - [Managing a Registry](#managing-a-registry)
+  - [Getting Started](#getting-started)
   - [Setup](#setup)
   - [registry.json](#registryjson)
   - [Commands](#commands)
@@ -110,6 +111,10 @@ git ls-remote https://github.com/your-user/your-registry.git HEAD
 ---
 
 # Managing a Registry
+
+## Getting Started
+
+Download [`registry.py`](https://raw.githubusercontent.com/BuildWithCollab/cpp-package-registry-util/main/registry.py) and place it in the root of your registry's git repository. That's the only file you need — zero dependencies, just Python 3.11+.
 
 ## Setup
 
