@@ -11,35 +11,57 @@ from registry import (
     generate_vcpkg_baseline,
     generate_xmake_lua,
     vcpkg_port_dir,
+    vcpkg_port_name,
     vcpkg_version_dir,
     vcpkg_version_file,
     vcpkg_baseline_file,
     vcpkg_version_string,
-    xmake_package_name,
     xmake_package_dir,
-    fetch_tarball_sha256,
 )
 
 
-# --- xmake naming ---
+# --- xmake naming (uses literal name) ---
 
 
 class TestXmakeNaming:
-    def test_dashes_to_underscores(self):
-        assert_that(xmake_package_name("my-cool-lib")).is_equal_to("my_cool_lib")
+    def test_preserves_dashes(self, tmp_path):
+        result = xmake_package_dir(tmp_path, "my-cool-lib")
+        assert_that(result.parts[-2:]).is_equal_to(("m", "my-cool-lib"))
 
-    def test_no_dashes_unchanged(self):
-        assert_that(xmake_package_name("raylib")).is_equal_to("raylib")
+    def test_preserves_underscores(self, tmp_path):
+        result = xmake_package_dir(tmp_path, "my_cool_lib")
+        assert_that(result.parts[-2:]).is_equal_to(("m", "my_cool_lib"))
 
     def test_package_dir(self, tmp_path):
         result = xmake_package_dir(tmp_path, "my-cool-lib")
-        assert_that(result.parts[-3:]).is_equal_to(("packages", "m", "my_cool_lib"))
+        assert_that(result.parts[-3:]).is_equal_to(("packages", "m", "my-cool-lib"))
 
 
-# --- vcpkg naming ---
+# --- vcpkg naming (sanitized) ---
 
 
 class TestVcpkgNaming:
+    def test_port_name_passthrough(self):
+        assert_that(vcpkg_port_name("my-lib")).is_equal_to("my-lib")
+
+    def test_port_name_underscores_to_dashes(self):
+        assert_that(vcpkg_port_name("my_cool_lib")).is_equal_to("my-cool-lib")
+
+    def test_port_name_lowercase(self):
+        assert_that(vcpkg_port_name("MyLib")).is_equal_to("mylib")
+
+    def test_port_name_strips_invalid_chars(self):
+        assert_that(vcpkg_port_name("my@lib!")).is_equal_to("mylib")
+
+    def test_port_name_collapses_repeated_dashes(self):
+        assert_that(vcpkg_port_name("my--lib")).is_equal_to("my-lib")
+
+    def test_port_name_strips_leading_trailing_dashes(self):
+        assert_that(vcpkg_port_name("-my-lib-")).is_equal_to("my-lib")
+
+    def test_port_name_combined(self):
+        assert_that(vcpkg_port_name("My_Cool__Lib!")).is_equal_to("my-cool-lib")
+
     def test_version_string(self):
         assert_that(vcpkg_version_string("2024-01-03", "40506ba5cbd2fe0fabe22017cfa7e9d0d0f7b182")).is_equal_to(
             "2024-01-03-40506ba"
@@ -47,6 +69,10 @@ class TestVcpkgNaming:
 
     def test_port_dir(self, tmp_path):
         result = vcpkg_port_dir(tmp_path, "some-lib")
+        assert_that(result.parts[-2:]).is_equal_to(("ports", "some-lib"))
+
+    def test_port_dir_sanitizes(self, tmp_path):
+        result = vcpkg_port_dir(tmp_path, "some_lib")
         assert_that(result.parts[-2:]).is_equal_to(("ports", "some-lib"))
 
     def test_version_dir(self, tmp_path):
@@ -62,11 +88,11 @@ class TestVcpkgNaming:
         assert_that(result.parts[-2:]).is_equal_to(("versions", "baseline.json"))
 
 
-# --- generate_xmake_lua ---
+# --- generate_xmake_lua (uses literal name) ---
 
 
 class TestGenerateXmakeLua:
-    def test_basic(self):
+    def test_basic_with_dashes(self):
         result = generate_xmake_lua(
             name="my-lib",
             repo="user/my-lib",
@@ -74,11 +100,21 @@ class TestGenerateXmakeLua:
             versions=["v1.0.0"],
             version_hashes={"v1.0.0": "abc123"},
         )
-        assert_that(result).contains('package("my_lib")')
+        assert_that(result).contains('package("my-lib")')
         assert_that(result).contains('set_homepage("https://github.com/user/my-lib")')
         assert_that(result).contains('set_description("A cool library")')
         assert_that(result).contains('add_urls("https://github.com/user/my-lib/archive/refs/tags/$(version).tar.gz")')
         assert_that(result).contains('add_versions("v1.0.0", "abc123")')
+
+    def test_basic_with_underscores(self):
+        result = generate_xmake_lua(
+            name="my_lib",
+            repo="user/my-lib",
+            description="desc",
+            versions=["v1.0.0"],
+            version_hashes={"v1.0.0": "abc123"},
+        )
+        assert_that(result).contains('package("my_lib")')
 
     def test_multiple_versions(self):
         result = generate_xmake_lua(
@@ -105,21 +141,13 @@ class TestGenerateXmakeLua:
         )
         assert_that(result).contains('import("package.tools.cmake").install(package)')
 
-    def test_dependencies(self):
+    def test_dependencies_literal(self):
         result = generate_xmake_lua(
             name="my-lib", repo="user/my-lib", description="desc",
             versions=[], version_hashes={},
-            dependencies=["other-lib", "another-lib"],
+            dependencies=["other-lib", "another_lib"],
         )
-        assert_that(result).contains('add_deps("other_lib", "another_lib")')
-
-    def test_dependency_names_converted(self):
-        result = generate_xmake_lua(
-            name="my-lib", repo="user/my-lib", description="desc",
-            versions=[], version_hashes={},
-            dependencies=["my-cool-dep"],
-        )
-        assert_that(result).contains('"my_cool_dep"')
+        assert_that(result).contains('add_deps("other-lib", "another_lib")')
 
 
 # --- generate_portfile_cmake ---
@@ -153,7 +181,7 @@ class TestGeneratePortfileCmake:
         assert_that(result).contains("OPTIONS -DBUILD_TESTS=OFF -DBUILD_EXAMPLE=OFF")
 
 
-# --- generate_vcpkg_json ---
+# --- generate_vcpkg_json (sanitizes names) ---
 
 
 class TestGenerateVcpkgJson:
@@ -163,12 +191,14 @@ class TestGenerateVcpkgJson:
         assert_that(result["version-string"]).is_equal_to("2024-01-03-40506ba")
         assert_that(result["description"]).is_equal_to("A cool library")
         assert_that(result["dependencies"]).is_length(2)
-        assert_that(result["dependencies"][0]["name"]).is_equal_to("vcpkg-cmake")
-        assert_that(result["dependencies"][1]["name"]).is_equal_to("vcpkg-cmake-config")
 
-    def test_with_dependencies(self):
+    def test_sanitizes_name(self):
+        result = generate_vcpkg_json("my_lib", "desc", "v1")
+        assert_that(result["name"]).is_equal_to("my-lib")
+
+    def test_with_dependencies_sanitized(self):
         result = generate_vcpkg_json(
-            "my-lib", "desc", "v1", dependencies=["other-lib", "another-lib"]
+            "my-lib", "desc", "v1", dependencies=["other_lib", "another-lib"]
         )
         assert_that(result["dependencies"]).is_length(4)
         assert_that(result["dependencies"][2]).is_equal_to("other-lib")
@@ -223,7 +253,7 @@ def make_fake_fetch(description="A test library", sha256="fakehash123", commit_s
 
 
 class TestGenerateXmakeFiles:
-    def test_generates_xmake_lua(self, tmp_path):
+    def test_generates_xmake_lua_with_literal_name(self, tmp_path):
         data = {
             "packages": {
                 "my-lib": {
@@ -235,13 +265,13 @@ class TestGenerateXmakeFiles:
         }
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
 
-        xmake_path = tmp_path / "packages" / "m" / "my_lib" / "xmake.lua"
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
         assert_that(xmake_path.exists()).is_true()
         content = xmake_path.read_text()
-        assert_that(content).contains('package("my_lib")')
+        assert_that(content).contains('package("my-lib")')
         assert_that(content).contains('add_versions("v1.0.0", "fakehash123")')
 
-    def test_generates_with_dependencies(self, tmp_path):
+    def test_generates_with_dependencies_literal(self, tmp_path):
         data = {
             "packages": {
                 "my-lib": {
@@ -254,9 +284,9 @@ class TestGenerateXmakeFiles:
         }
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
 
-        xmake_path = tmp_path / "packages" / "m" / "my_lib" / "xmake.lua"
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
         content = xmake_path.read_text()
-        assert_that(content).contains('add_deps("other_lib")')
+        assert_that(content).contains('add_deps("other-lib")')
 
     def test_header_only_xmake(self, tmp_path):
         data = {
@@ -271,7 +301,7 @@ class TestGenerateXmakeFiles:
         }
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
 
-        xmake_path = tmp_path / "packages" / "m" / "my_lib" / "xmake.lua"
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
         content = xmake_path.read_text()
         assert_that(content).contains('os.cp("include", package:installdir())')
 
@@ -300,6 +330,33 @@ class TestGenerateVcpkgFiles:
         pkg_data = json.loads(vcpkg_json.read_text())
         assert_that(pkg_data["name"]).is_equal_to("my-lib")
         assert_that(pkg_data["version-string"]).is_equal_to("2024-06-15-abc123d")
+
+    def test_vcpkg_sanitizes_underscore_name(self, tmp_path):
+        data = {
+            "packages": {
+                "my_lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["vcpkg"],
+                }
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+
+        # Port dir uses sanitized name
+        portfile = tmp_path / "ports" / "my-lib" / "portfile.cmake"
+        assert_that(portfile.exists()).is_true()
+
+        # vcpkg.json name is sanitized
+        vcpkg_json = tmp_path / "ports" / "my-lib" / "vcpkg.json"
+        pkg_data = json.loads(vcpkg_json.read_text())
+        assert_that(pkg_data["name"]).is_equal_to("my-lib")
+
+        # baseline uses sanitized name
+        baseline = tmp_path / "versions" / "baseline.json"
+        bdata = json.loads(baseline.read_text())
+        assert_that(bdata["default"]).contains_key("my-lib")
+        assert_that(bdata["default"]).does_not_contain_key("my_lib")
 
     def test_generates_version_file(self, tmp_path):
         data = {
@@ -392,7 +449,7 @@ class TestGenerateVcpkgFiles:
                     "repo": "user/my-lib",
                     "versions": ["v1.0.0"],
                     "registries": ["vcpkg"],
-                    "dependencies": ["other-lib"],
+                    "dependencies": ["other_lib"],
                 }
             }
         }
@@ -415,16 +472,15 @@ class TestGenerateBothRegistries:
         }
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
 
-        # xmake
-        xmake_path = tmp_path / "packages" / "m" / "my_lib" / "xmake.lua"
+        # xmake uses literal name
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
         assert_that(xmake_path.exists()).is_true()
 
-        # vcpkg
+        # vcpkg uses sanitized name (same in this case)
         portfile = tmp_path / "ports" / "my-lib" / "portfile.cmake"
         assert_that(portfile.exists()).is_true()
 
     def test_multiple_packages(self, tmp_path):
-        call_count = {"desc": 0}
         descriptions = {"user/lib-a": "Library A", "user/lib-b": "Library B"}
 
         def multi_fetch(kind, **kwargs):
@@ -445,11 +501,11 @@ class TestGenerateBothRegistries:
         generate(data, tmp_path, fetch_fn=multi_fetch, commit=False)
 
         # lib-a: both registries
-        assert_that((tmp_path / "packages" / "l" / "lib_a" / "xmake.lua").exists()).is_true()
+        assert_that((tmp_path / "packages" / "l" / "lib-a" / "xmake.lua").exists()).is_true()
         assert_that((tmp_path / "ports" / "lib-a" / "portfile.cmake").exists()).is_true()
 
         # lib-b: xmake only
-        assert_that((tmp_path / "packages" / "l" / "lib_b" / "xmake.lua").exists()).is_true()
+        assert_that((tmp_path / "packages" / "l" / "lib-b" / "xmake.lua").exists()).is_true()
         assert_that((tmp_path / "ports" / "lib-b").exists()).is_false()
 
         # baseline only has lib-a (lib-b is xmake-only)
@@ -471,10 +527,10 @@ class TestGenerateIdempotent:
             }
         }
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
-        first_content = (tmp_path / "packages" / "m" / "my_lib" / "xmake.lua").read_text()
+        first_content = (tmp_path / "packages" / "m" / "my-lib" / "xmake.lua").read_text()
 
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
-        second_content = (tmp_path / "packages" / "m" / "my_lib" / "xmake.lua").read_text()
+        second_content = (tmp_path / "packages" / "m" / "my-lib" / "xmake.lua").read_text()
 
         assert_that(first_content).is_equal_to(second_content)
 

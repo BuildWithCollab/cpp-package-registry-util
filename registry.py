@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -237,13 +238,8 @@ def git_tree_sha_for_path(path: str, working_dir: str | None = None) -> str:
 # --- xmake generation ---
 
 
-def xmake_package_name(name: str) -> str:
-    return name.replace("-", "_")
-
-
 def xmake_package_dir(root: Path, name: str) -> Path:
-    xname = xmake_package_name(name)
-    return root / "packages" / xname[0].lower() / xname
+    return root / "packages" / name[0].lower() / name
 
 
 def generate_xmake_lua(
@@ -255,9 +251,8 @@ def generate_xmake_lua(
     dependencies: list[str] | None = None,
     header_only: bool = False,
 ) -> str:
-    xname = xmake_package_name(name)
     lines = []
-    lines.append(f'package("{xname}")')
+    lines.append(f'package("{name}")')
     lines.append(f'    set_homepage("https://github.com/{repo}")')
     lines.append(f'    set_description("{description}")')
     lines.append(f'    add_urls("https://github.com/{repo}/archive/refs/tags/$(version).tar.gz")')
@@ -267,7 +262,7 @@ def generate_xmake_lua(
         lines.append(f'    add_versions("{version}", "{sha}")')
 
     if dependencies:
-        dep_names = ", ".join(f'"{xmake_package_name(d)}"' for d in dependencies)
+        dep_names = ", ".join(f'"{d}"' for d in dependencies)
         lines.append(f"    add_deps({dep_names})")
 
     if header_only:
@@ -285,20 +280,31 @@ def generate_xmake_lua(
 # --- vcpkg generation ---
 
 
+def vcpkg_port_name(name: str) -> str:
+    name = name.replace("_", "-").lower()
+    name = re.sub(r"[^a-z0-9-]", "", name)
+    name = re.sub(r"-+", "-", name)
+    name = name.strip("-")
+    return name
+
+
 def vcpkg_version_string(date: str, sha: str) -> str:
     return f"{date}-{sha[:7]}"
 
 
 def vcpkg_port_dir(root: Path, name: str) -> Path:
-    return root / "ports" / name
+    pname = vcpkg_port_name(name)
+    return root / "ports" / pname
 
 
 def vcpkg_version_dir(root: Path, name: str) -> Path:
-    return root / "versions" / f"{name[0].lower()}-"
+    pname = vcpkg_port_name(name)
+    return root / "versions" / f"{pname[0]}-"
 
 
 def vcpkg_version_file(root: Path, name: str) -> Path:
-    return vcpkg_version_dir(root, name) / f"{name}.json"
+    pname = vcpkg_port_name(name)
+    return vcpkg_version_dir(root, name) / f"{pname}.json"
 
 
 def vcpkg_baseline_file(root: Path) -> Path:
@@ -346,8 +352,9 @@ def generate_vcpkg_json(
     version_string: str,
     dependencies: list[str] | None = None,
 ) -> dict:
+    pname = vcpkg_port_name(name)
     vcpkg_json = {
-        "name": name,
+        "name": pname,
         "version-string": version_string,
         "description": description,
         "dependencies": [
@@ -356,7 +363,7 @@ def generate_vcpkg_json(
         ],
     }
     for dep in (dependencies or []):
-        vcpkg_json["dependencies"].append(dep)
+        vcpkg_json["dependencies"].append(vcpkg_port_name(dep))
     return vcpkg_json
 
 
@@ -487,10 +494,11 @@ def _generate_vcpkg(
         with open(port_dir / "vcpkg.json", "w", encoding="utf-8") as f:
             json.dump(vcpkg_json, f, indent=2)
 
+        pname = vcpkg_port_name(name)
         if commit:
-            git_exec(["add", f"ports/{name}"], working_dir)
-            git_exec(["commit", "-m", f"Update {name} to {vs}"], working_dir)
-            tree_sha = git_tree_sha_for_path(f"ports/{name}", working_dir)
+            git_exec(["add", f"ports/{pname}"], working_dir)
+            git_exec(["commit", "-m", f"Update {pname} to {vs}"], working_dir)
+            tree_sha = git_tree_sha_for_path(f"ports/{pname}", working_dir)
             print(f"  vcpkg: git-tree {tree_sha}")
         else:
             tree_sha = "no-commit-mode"
@@ -507,7 +515,7 @@ def _generate_vcpkg(
     if commit:
         git_exec(["add", str(version_file)], working_dir)
 
-    baseline_entries[name] = {"baseline": latest_vs, "port-version": 0}
+    baseline_entries[vcpkg_port_name(name)] = {"baseline": latest_vs, "port-version": 0}
     print(f"  vcpkg: baseline -> {latest_vs}")
 
 
