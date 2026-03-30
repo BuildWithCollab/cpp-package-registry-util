@@ -25,11 +25,13 @@
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 DEFAULT_REGISTRY_FILE = "registry.json"
 VALID_REGISTRIES = ("vcpkg", "xmake")
@@ -144,10 +146,34 @@ def get_package_registries(pkg: dict) -> list[str]:
 # --- GitHub API ---
 
 
+def _github_request(url: str) -> Request:
+    req = Request(url)
+    token = os.environ.get("GH_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    return req
+
+
+def _github_fetch_json(url: str, context: str = "") -> dict | list:
+    try:
+        with urlopen(_github_request(url)) as response:
+            return json.load(response)
+    except HTTPError as e:
+        if e.code == 404:
+            print(f"Repository not found: {context or url}", file=sys.stderr)
+            print("Is the repository private? This tool requires public repositories (or set GH_TOKEN for private repos).", file=sys.stderr)
+        elif e.code == 403:
+            print(f"Access denied: {context or url}", file=sys.stderr)
+            print("You may be rate-limited. Set GH_TOKEN to authenticate requests.", file=sys.stderr)
+        else:
+            print(f"GitHub API error ({e.code}): {context or url}", file=sys.stderr)
+        sys.exit(1)
+
+
 def get_latest_tag(repo: str) -> str:
-    url = f"https://api.github.com/repos/{repo}/tags"
-    with urlopen(url) as response:
-        tags = json.load(response)
+    tags = _github_fetch_json(
+        f"https://api.github.com/repos/{repo}/tags", context=repo
+    )
     if not tags:
         print(f"No tags found for '{repo}'.", file=sys.stderr)
         sys.exit(1)
@@ -155,16 +181,16 @@ def get_latest_tag(repo: str) -> str:
 
 
 def get_repo_description(repo: str) -> str:
-    url = f"https://api.github.com/repos/{repo}"
-    with urlopen(url) as response:
-        data = json.load(response)
+    data = _github_fetch_json(
+        f"https://api.github.com/repos/{repo}", context=repo
+    )
     return data.get("description") or ""
 
 
 def get_commit_info_for_ref(repo: str, ref: str) -> dict:
-    url = f"https://api.github.com/repos/{repo}/commits/{ref}"
-    with urlopen(url) as response:
-        data = json.load(response)
+    data = _github_fetch_json(
+        f"https://api.github.com/repos/{repo}/commits/{ref}", context=f"{repo}@{ref}"
+    )
     return {
         "sha": data["sha"],
         "date": data["commit"]["committer"]["date"][:10],
@@ -173,11 +199,17 @@ def get_commit_info_for_ref(repo: str, ref: str) -> dict:
 
 def fetch_tarball_sha256(repo: str, version: str) -> str:
     url = f"https://github.com/{repo}/archive/refs/tags/{version}.tar.gz"
-    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=True) as tmp:
-        with urlopen(url) as response:
+    try:
+        with urlopen(_github_request(url)) as response:
             data = response.read()
-        sha256 = hashlib.sha256(data).hexdigest()
-    return sha256
+    except HTTPError as e:
+        if e.code == 404:
+            print(f"Tarball not found: {repo}@{version}", file=sys.stderr)
+            print("Does this tag exist?", file=sys.stderr)
+        else:
+            print(f"Failed to download tarball ({e.code}): {repo}@{version}", file=sys.stderr)
+        sys.exit(1)
+    return hashlib.sha256(data).hexdigest()
 
 
 # --- Git operations ---
