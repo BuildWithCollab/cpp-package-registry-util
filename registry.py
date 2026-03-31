@@ -349,6 +349,50 @@ def _format_xmake_dep(dep) -> str:
     return f'    add_deps("{name}")'
 
 
+MARKER_START = "-- [[ GENERATED:{section} ]]"
+MARKER_END = "-- [[ /GENERATED:{section} ]]"
+
+
+def _marker_start(section: str) -> str:
+    return MARKER_START.format(section=section)
+
+
+def _marker_end(section: str) -> str:
+    return MARKER_END.format(section=section)
+
+
+def _generate_xmake_versions_block(versions: list[str], version_hashes: dict[str, str]) -> list[str]:
+    lines = []
+    for version in versions:
+        sha = version_hashes.get(version, "")
+        lines.append(f'    add_versions("{version}", "{sha}")')
+    return lines
+
+
+def _generate_xmake_deps_block(dependencies: list) -> list[str]:
+    lines = []
+    for dep in dependencies:
+        lines.append(_format_xmake_dep(dep))
+    return lines
+
+
+def _generate_xmake_install_block(header_only: bool, xmake_config: dict | None) -> list[str]:
+    lines = []
+    if header_only:
+        lines.append('    on_install(function (package)')
+        lines.append('        os.cp("include", package:installdir())')
+        lines.append('    end)')
+    else:
+        lines.append('    on_install(function (package)')
+        if xmake_config:
+            config_str = _lua_value(xmake_config)
+            lines.append(f'        import("package.tools.xmake").install(package, {config_str})')
+        else:
+            lines.append('        import("package.tools.xmake").install(package)')
+        lines.append('    end)')
+    return lines
+
+
 def generate_xmake_lua(
     name: str,
     repo: str,
@@ -366,31 +410,54 @@ def generate_xmake_lua(
     lines.append(f'    set_description("{description}")')
     if license:
         lines.append(f'    set_license("{license}")')
-
     lines.append(f'    add_urls("https://github.com/{repo}/archive/refs/tags/$(version).tar.gz")')
 
-    for version in versions:
-        sha = version_hashes.get(version, "")
-        lines.append(f'    add_versions("{version}", "{sha}")')
+    # Versions section
+    lines.append(_marker_start("versions"))
+    lines.extend(_generate_xmake_versions_block(versions, version_hashes))
+    lines.append(_marker_end("versions"))
 
+    # Dependencies section
+    lines.append(_marker_start("deps"))
     if dependencies:
-        for dep in dependencies:
-            lines.append(_format_xmake_dep(dep))
+        lines.extend(_generate_xmake_deps_block(dependencies))
+    lines.append(_marker_end("deps"))
 
-    if header_only:
-        lines.append('    on_install(function (package)')
-        lines.append('        os.cp("include", package:installdir())')
-        lines.append('    end)')
-    else:
-        lines.append('    on_install(function (package)')
-        if xmake_config:
-            config_str = _lua_value(xmake_config)
-            lines.append(f'        import("package.tools.xmake").install(package, {config_str})')
-        else:
-            lines.append('        import("package.tools.xmake").install(package)')
-        lines.append('    end)')
+    # Install section
+    lines.append(_marker_start("install"))
+    lines.extend(_generate_xmake_install_block(header_only, xmake_config))
+    lines.append(_marker_end("install"))
 
     return "\n".join(lines) + "\n"
+
+
+def update_xmake_lua(
+    existing_content: str,
+    versions: list[str],
+    version_hashes: dict[str, str],
+    dependencies: list | None = None,
+    header_only: bool = False,
+    xmake_config: dict | None = None,
+) -> str:
+    sections = {
+        "versions": "\n".join(_generate_xmake_versions_block(versions, version_hashes)),
+        "deps": "\n".join(_generate_xmake_deps_block(dependencies or [])),
+        "install": "\n".join(_generate_xmake_install_block(header_only, xmake_config)),
+    }
+
+    result = existing_content
+    for section, new_content in sections.items():
+        start = _marker_start(section)
+        end = _marker_end(section)
+        if start in result and end in result:
+            before = result[:result.index(start) + len(start)]
+            after = result[result.index(end):]
+            if new_content:
+                result = before + "\n" + new_content + "\n" + after
+            else:
+                result = before + "\n" + after
+
+    return result
 
 
 # --- vcpkg generation ---
@@ -497,7 +564,7 @@ def generate_vcpkg_baseline(packages: dict[str, str]) -> dict:
 # --- generate orchestrator ---
 
 
-def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None:
+def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True, overwrite: bool = False, only_package: str | None = None) -> None:
     if fetch_fn is None:
         fetch_fn = _default_fetch
 
@@ -517,6 +584,8 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
         baseline_entries = existing_baseline.get("default", {})
 
     for name, pkg in packages.items():
+        if only_package and name != only_package:
+            continue
         registries = get_package_registries(pkg)
         repo = pkg["repo"]
         versions = pkg.get("versions", [])
@@ -537,7 +606,7 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
         if "xmake" in registries:
             _generate_xmake(
                 root, name, repo, description, versions, xmake_deps,
-                header_only, fetch_fn, license_id, xmake_config,
+                header_only, fetch_fn, license_id, xmake_config, overwrite,
             )
 
         if "vcpkg" in registries:
@@ -555,24 +624,34 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True) -> None
             git_exec(["add", str(baseline_path)], working_dir)
 
 
-def _generate_xmake(root, name, repo, description, versions, dependencies, header_only, fetch_fn, license_id="", xmake_config=None):
+def _generate_xmake(root, name, repo, description, versions, dependencies, header_only, fetch_fn, license_id="", xmake_config=None, overwrite=False):
     version_hashes = {}
     for version in versions:
         print(f"  xmake: fetching SHA256 for {version}...")
         sha256 = fetch_fn("tarball_sha256", repo=repo, version=version)
         version_hashes[version] = sha256
 
-    xmake_lua = generate_xmake_lua(
-        name, repo, description, versions, version_hashes,
-        dependencies=dependencies, header_only=header_only,
-        license=license_id, xmake_config=xmake_config,
-    )
-
     pkg_dir = xmake_package_dir(root, name)
     pkg_dir.mkdir(parents=True, exist_ok=True)
     xmake_path = pkg_dir / "xmake.lua"
-    xmake_path.write_text(xmake_lua, encoding="utf-8")
-    print(f"  xmake: wrote {xmake_path}")
+
+    if xmake_path.exists() and not overwrite:
+        existing = xmake_path.read_text(encoding="utf-8")
+        updated = update_xmake_lua(
+            existing, versions, version_hashes,
+            dependencies=dependencies, header_only=header_only,
+            xmake_config=xmake_config,
+        )
+        xmake_path.write_text(updated, encoding="utf-8")
+        print(f"  xmake: updated {xmake_path}")
+    else:
+        xmake_lua = generate_xmake_lua(
+            name, repo, description, versions, version_hashes,
+            dependencies=dependencies, header_only=header_only,
+            license=license_id, xmake_config=xmake_config,
+        )
+        xmake_path.write_text(xmake_lua, encoding="utf-8")
+        print(f"  xmake: wrote {xmake_path}")
 
 
 def _generate_vcpkg(
@@ -732,9 +811,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # generate
     gen_parser = subparsers.add_parser("generate", help="Generate vcpkg and xmake registry files.")
+    gen_parser.add_argument("name", nargs="?", help="Generate only this package (default: all)")
     gen_parser.add_argument(
         "--no-commit", action="store_true",
         help="Generate files without git commits (useful for testing)",
+    )
+    gen_parser.add_argument(
+        "--overwrite", action="store_true",
+        help="Overwrite existing files instead of updating marked sections",
     )
 
     return parser
@@ -758,7 +842,7 @@ def main(argv: list[str] | None = None):
     if args.command == "generate":
         data = load_registry(registry_path)
         root = registry_path.parent
-        generate(data, root, commit=not args.no_commit)
+        generate(data, root, commit=not args.no_commit, overwrite=args.overwrite, only_package=args.name)
         if not args.no_commit:
             git_exec(["commit", "--amend", "--no-edit"], str(root))
         print("Done.")

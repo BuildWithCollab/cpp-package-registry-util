@@ -10,6 +10,7 @@ from registry import (
     generate_vcpkg_versions_json,
     generate_vcpkg_baseline,
     generate_xmake_lua,
+    update_xmake_lua,
     vcpkg_port_dir,
     vcpkg_port_name,
     vcpkg_version_dir,
@@ -19,6 +20,8 @@ from registry import (
     xmake_package_dir,
     _lua_value,
     _format_xmake_dep,
+    _marker_start,
+    _marker_end,
 )
 
 
@@ -734,3 +737,127 @@ class TestGenerateIdempotent:
         pkg_data = json.loads(vcpkg_json.read_text())
         assert_that(pkg_data["dependencies"]).contains("new-dep")
         assert_that(pkg_data["dependencies"]).does_not_contain("old-dep")
+
+
+# --- xmake markers and update ---
+
+
+class TestXmakeMarkers:
+    def test_generated_file_has_markers(self):
+        result = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=["v1.0.0"], version_hashes={"v1.0.0": "abc123"},
+            dependencies=["spdlog"],
+        )
+        assert_that(result).contains(_marker_start("versions"))
+        assert_that(result).contains(_marker_end("versions"))
+        assert_that(result).contains(_marker_start("deps"))
+        assert_that(result).contains(_marker_end("deps"))
+        assert_that(result).contains(_marker_start("install"))
+        assert_that(result).contains(_marker_end("install"))
+
+    def test_update_replaces_versions(self):
+        original = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=["v1.0.0"], version_hashes={"v1.0.0": "aaa"},
+        )
+        updated = update_xmake_lua(
+            original,
+            versions=["v1.0.0", "v2.0.0"],
+            version_hashes={"v1.0.0": "aaa", "v2.0.0": "bbb"},
+        )
+        assert_that(updated).contains('add_versions("v2.0.0", "bbb")')
+        assert_that(updated).contains('add_versions("v1.0.0", "aaa")')
+
+    def test_update_replaces_deps(self):
+        original = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=[], version_hashes={}, dependencies=["old-dep"],
+        )
+        updated = update_xmake_lua(
+            original,
+            versions=[], version_hashes={},
+            dependencies=["new-dep"],
+        )
+        assert_that(updated).contains('add_deps("new-dep")')
+        assert_that(updated).does_not_contain("old-dep")
+
+    def test_update_skips_missing_marker(self):
+        # Simulate user removing install markers to own that section
+        original = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=["v1.0.0"], version_hashes={"v1.0.0": "aaa"},
+        )
+        # Remove install markers (user takes ownership)
+        custom_install = original.replace(_marker_start("install") + "\n", "")
+        custom_install = custom_install.replace(_marker_end("install") + "\n", "")
+        custom_install = custom_install.replace(
+            '        import("package.tools.xmake").install(package)',
+            '        import("package.tools.xmake").install(package, { custom = true })',
+        )
+
+        updated = update_xmake_lua(
+            custom_install,
+            versions=["v1.0.0", "v2.0.0"],
+            version_hashes={"v1.0.0": "aaa", "v2.0.0": "bbb"},
+        )
+        # Versions updated
+        assert_that(updated).contains('add_versions("v2.0.0", "bbb")')
+        # Custom install preserved
+        assert_that(updated).contains("custom = true")
+
+    def test_update_preserves_content_outside_markers(self):
+        original = generate_xmake_lua(
+            name="my-lib", repo="user/my-lib", description="desc",
+            versions=["v1.0.0"], version_hashes={"v1.0.0": "aaa"},
+        )
+        # Add custom content after the file
+        custom = original.rstrip() + "\n\n    on_test(function (package)\n        -- custom test\n    end)\n"
+
+        updated = update_xmake_lua(
+            custom, versions=["v2.0.0"], version_hashes={"v2.0.0": "bbb"},
+        )
+        assert_that(updated).contains("on_test")
+        assert_that(updated).contains("custom test")
+        assert_that(updated).contains('add_versions("v2.0.0", "bbb")')
+
+
+class TestGenerateOverwrite:
+    def test_overwrite_regenerates_full_file(self, tmp_path):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "versions": ["v1.0.0"],
+                    "registries": ["xmake"],
+                }
+            }
+        }
+        # First generate
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+
+        # Manually modify the file
+        xmake_path = tmp_path / "packages" / "m" / "my-lib" / "xmake.lua"
+        xmake_path.write_text("-- completely custom\n", encoding="utf-8")
+
+        # Generate without overwrite - file has no markers, so nothing updates
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
+        assert_that(xmake_path.read_text()).contains("completely custom")
+
+        # Generate with overwrite - full regeneration
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False, overwrite=True)
+        content = xmake_path.read_text()
+        assert_that(content).contains('package("my-lib")')
+        assert_that(content).does_not_contain("completely custom")
+
+    def test_only_package_filter(self, tmp_path):
+        data = {
+            "packages": {
+                "lib-a": {"repo": "user/lib-a", "versions": ["v1.0.0"], "registries": ["xmake"]},
+                "lib-b": {"repo": "user/lib-b", "versions": ["v1.0.0"], "registries": ["xmake"]},
+            }
+        }
+        generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False, only_package="lib-a")
+
+        assert_that((tmp_path / "packages" / "l" / "lib-a" / "xmake.lua").exists()).is_true()
+        assert_that((tmp_path / "packages" / "l" / "lib-b").exists()).is_false()
