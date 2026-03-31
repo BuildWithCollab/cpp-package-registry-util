@@ -864,7 +864,7 @@ def generate_readme(data: dict, working_dir: str | None = None) -> str:
     vcpkg_packages_json = _json_list(vcpkg_names, 12)
     vcpkg_deps_json = _json_list(vcpkg_names, 8)
 
-    return f"""# Packages <!-- omit in toc -->
+    return f"""## Packages <!-- omit in toc -->
 
 This is a [`vcpkg`](https://vcpkg.io/) and [`xmake`](https://xmake.io/) C++ package registry.
 
@@ -875,13 +875,13 @@ This is a [`vcpkg`](https://vcpkg.io/) and [`xmake`](https://xmake.io/) C++ pack
   - [`vcpkg`](#vcpkg)
     - [`vcpkg-configuration.json`](#vcpkg-configurationjson)
       - [Updating Baselines](#updating-baselines)
-    - [`vcpkg.json`](#vcpkgjson)
+    - [`vcpkg.json`](#vcpkg-json)
 
 ---
 
-# Build Tool Configuration
+## Build Tool Configuration
 
-## `xmake`
+### `xmake`
 
 {xmake_pkg_list}
 
@@ -898,7 +898,7 @@ target("my-project")
     add_packages("{example_pkg}")
 ```
 
-## `vcpkg`
+### `vcpkg`
 
 {vcpkg_pkg_list}
 
@@ -909,7 +909,7 @@ There are two configuration files you need:
 - `vcpkg-configuration.json`
 - `vcpkg.json`
 
-### `vcpkg-configuration.json`
+#### `vcpkg-configuration.json`
 
 This tells `vcpkg` where to find packages. Create this file in your project root:
 
@@ -933,7 +933,7 @@ This tells `vcpkg` where to find packages. Create this file in your project root
 
 > Update the `packages` list with the names of the packages you want to use from this registry.
 
-#### Updating Baselines
+##### Updating Baselines
 
 A `baseline` is a git commit hash. `vcpkg` uses it to determine which package versions are available.
 
@@ -953,7 +953,7 @@ To get the latest baseline for the main `vcpkg` registry:
 git ls-remote https://github.com/microsoft/vcpkg.git HEAD
 ```
 
-### `vcpkg.json`
+#### `vcpkg.json`
 
 This is your project manifest. Add the packages you want:
 
