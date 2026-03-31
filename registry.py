@@ -742,6 +742,29 @@ def _default_fetch(kind: str, **kwargs) -> str | dict:
     raise ValueError(f"Unknown fetch kind: {kind}")
 
 
+SELF_UPDATE_URL = "https://raw.githubusercontent.com/BuildWithCollab/cpp-package-registry-util/main/registry.py"
+
+
+def self_update() -> None:
+    url = SELF_UPDATE_URL
+    try:
+        with urlopen(_github_request(url)) as response:
+            new_content = response.read()
+    except HTTPError as e:
+        print(f"Failed to download update ({e.code}).", file=sys.stderr)
+        sys.exit(1)
+
+    script_path = Path(__file__).resolve()
+    old_content = script_path.read_bytes()
+
+    if new_content == old_content:
+        print("Already up to date.")
+        return
+
+    script_path.write_bytes(new_content)
+    print(f"Updated {script_path}")
+
+
 # --- CLI ---
 
 
@@ -809,6 +832,9 @@ def build_parser() -> argparse.ArgumentParser:
     sc_parser.add_argument("name", help="Package name")
     sc_parser.add_argument("values", nargs="+", help="Config key=value pairs (e.g. build_tests=false)")
 
+    # self-update
+    subparsers.add_parser("self-update", help="Update registry.py to the latest version from GitHub.")
+
     # generate
     gen_parser = subparsers.add_parser("generate", help="Generate vcpkg and xmake registry files.")
     gen_parser.add_argument("name", nargs="?", help="Generate only this package (default: all)")
@@ -833,6 +859,10 @@ def main(argv: list[str] | None = None):
         sys.exit(1)
 
     registry_path = Path(args.file)
+
+    if args.command == "self-update":
+        self_update()
+        return
 
     if args.command == "list":
         data = load_registry(registry_path)
