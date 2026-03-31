@@ -377,20 +377,12 @@ def _generate_xmake_deps_block(dependencies: list) -> list[str]:
 
 
 def _generate_xmake_install_block(header_only: bool, xmake_config: dict | None) -> list[str]:
-    lines = []
     if header_only:
-        lines.append('    on_install(function (package)')
-        lines.append('        os.cp("include", package:installdir())')
-        lines.append('    end)')
-    else:
-        lines.append('    on_install(function (package)')
-        if xmake_config:
-            config_str = _lua_value(xmake_config)
-            lines.append(f'        import("package.tools.xmake").install(package, {config_str})')
-        else:
-            lines.append('        import("package.tools.xmake").install(package)')
-        lines.append('    end)')
-    return lines
+        return ['        os.cp("include", package:installdir())']
+    if xmake_config:
+        config_str = _lua_value(xmake_config)
+        return [f'        import("package.tools.xmake").install(package, {config_str})']
+    return ['        import("package.tools.xmake").install(package)']
 
 
 def generate_xmake_lua(
@@ -424,9 +416,11 @@ def generate_xmake_lua(
     lines.append(_marker_end("deps"))
 
     # Install section
+    lines.append('    on_install(function (package)')
     lines.append(_marker_start("install"))
     lines.extend(_generate_xmake_install_block(header_only, xmake_config))
     lines.append(_marker_end("install"))
+    lines.append('    end)')
 
     return "\n".join(lines) + "\n"
 
@@ -765,7 +759,198 @@ def self_update() -> None:
     print(f"Updated {script_path}")
 
 
-# --- CLI ---
+# --- README generation ---
+
+
+def _get_git_remote_url(working_dir: str | None = None) -> str:
+    result = subprocess.run(
+        ["git", "config", "--get", "remote.origin.url"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=working_dir,
+    )
+    if result.returncode != 0:
+        return ""
+    url = result.stdout.strip()
+    # Normalize git@ to https
+    if url.startswith("git@github.com:"):
+        url = "https://github.com/" + url[len("git@github.com:"):]
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url
+
+
+def _get_git_head_sha(working_dir: str | None = None) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=working_dir,
+    )
+    if result.returncode != 0:
+        return "<commit-hash>"
+    return result.stdout.strip()
+
+
+def _github_url_to_parts(url: str) -> tuple[str, str]:
+    parts = url.rstrip("/").split("/")
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    return "", ""
+
+
+def generate_readme(data: dict, working_dir: str | None = None) -> str:
+    repo_url = _get_git_remote_url(working_dir)
+    head_sha = _get_git_head_sha(working_dir)
+    org, repo_name = _github_url_to_parts(repo_url)
+
+    packages = data.get("packages", {})
+    pkg_names = list(packages.keys())
+    vcpkg_names = []
+    for name, pkg in packages.items():
+        registries = get_package_registries(pkg)
+        if "vcpkg" in registries:
+            vcpkg_names.append(vcpkg_port_name(name))
+
+    xmake_registry_name = org or "my-registry"
+    git_url = f"{repo_url}.git" if repo_url else "https://github.com/your-user/your-registry.git"
+    commits_url = f"{repo_url}/commits/main/" if repo_url else "https://github.com/your-user/your-registry/commits/main/"
+
+    example_pkg = pkg_names[0] if pkg_names else "some-package"
+    example_vcpkg = vcpkg_names[0] if vcpkg_names else "some-package"
+
+    pkg_list_md = ""
+    if pkg_names:
+        pkg_list_md = "\n".join(f"- `{name}`" for name in pkg_names)
+
+    def _json_list(items, indent_spaces):
+        if not items:
+            return '["some-package"]'
+        if len(items) == 1:
+            return json.dumps(items)
+        prefix = " " * indent_spaces
+        inner = ",\n".join(f'{prefix}    "{item}"' for item in items)
+        return f"[\n{inner}\n{prefix}]"
+
+    vcpkg_packages_json = _json_list(vcpkg_names, 12)
+    vcpkg_deps_json = _json_list(vcpkg_names, 8)
+
+    return f"""# Packages <!-- omit in toc -->
+
+This is a [`vcpkg`](https://vcpkg.io/) and [`xmake`](https://xmake.io/) C++ package registry.
+
+---
+
+- [Packages](#packages)
+- [Build Tool Configuration](#build-tool-configuration)
+  - [`xmake`](#xmake)
+  - [`vcpkg`](#vcpkg)
+    - [`vcpkg-configuration.json`](#vcpkg-configurationjson)
+      - [Updating Baselines](#updating-baselines)
+    - [`vcpkg.json`](#vcpkgjson)
+
+---
+
+# Packages
+
+{pkg_list_md}
+
+# Build Tool Configuration
+
+## `xmake`
+
+Configuring `xmake` to use this package registry couldn't be easier:
+
+```lua
+add_repositories("{xmake_registry_name} {git_url}")
+
+add_requires("{example_pkg}")
+
+target("my-project")
+    set_kind("binary")
+    add_files("src/*.cpp")
+    add_packages("{example_pkg}")
+```
+
+## `vcpkg`
+
+Custom registries for `vcpkg` are a bit more involved, but still easy to set up.
+
+There are two configuration files you need:
+
+- `vcpkg-configuration.json`
+- `vcpkg.json`
+
+### `vcpkg-configuration.json`
+
+This tells `vcpkg` where to find packages. Create this file in your project root:
+
+```json
+{{
+    "default-registry": {{
+        "kind": "git",
+        "repository": "https://github.com/microsoft/vcpkg.git",
+        "baseline": "<latest-vcpkg-commit-hash>"
+    }},
+    "registries": [
+        {{
+            "kind": "git",
+            "repository": "{git_url}",
+            "baseline": "{head_sha}",
+            "packages": {vcpkg_packages_json}
+        }}
+    ]
+}}
+```
+
+> Update the `packages` list with the names of the packages you want to use from this registry.
+
+#### Updating Baselines
+
+A `baseline` is a git commit hash. `vcpkg` uses it to determine which package versions are available.
+
+**When this registry is updated**, you need to update the baseline to see new packages or versions.
+
+To get the latest baseline for this registry:
+
+```
+git ls-remote {git_url} HEAD
+```
+
+Or visit: {commits_url}
+
+To get the latest baseline for the main `vcpkg` registry:
+
+```
+git ls-remote https://github.com/microsoft/vcpkg.git HEAD
+```
+
+### `vcpkg.json`
+
+This is your project manifest. Add the packages you want:
+
+```json
+{{
+    "name": "my-project",
+    "version-string": "0.0.1",
+    "dependencies": {vcpkg_deps_json}
+}}
+```
+
+> The `name` and `version-string` fields just need to be valid — they can be anything.
+> `name` must be all lowercase letters, numbers, and hyphens.
+
+You can mix packages from different registries. For example, `spdlog` from the main `vcpkg` registry and `{example_vcpkg}` from this one:
+
+```json
+{{
+    "name": "my-project",
+    "version-string": "0.0.1",
+    "dependencies": [
+        "spdlog",
+        "{example_vcpkg}"
+    ]
+}}
+```
+"""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -832,6 +1017,9 @@ def build_parser() -> argparse.ArgumentParser:
     sc_parser.add_argument("name", help="Package name")
     sc_parser.add_argument("values", nargs="+", help="Config key=value pairs (e.g. build_tests=false)")
 
+    # readme
+    subparsers.add_parser("readme", help="Generate a README snippet for consumers of this registry.")
+
     # self-update
     subparsers.add_parser("self-update", help="Update registry.py to the latest version from GitHub.")
 
@@ -859,6 +1047,12 @@ def main(argv: list[str] | None = None):
         sys.exit(1)
 
     registry_path = Path(args.file)
+
+    if args.command == "readme":
+        data = load_registry(registry_path)
+        root = str(registry_path.parent) if registry_path.parent != Path() else None
+        print(generate_readme(data, working_dir=root))
+        return
 
     if args.command == "self-update":
         self_update()
