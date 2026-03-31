@@ -797,6 +797,30 @@ def _github_url_to_parts(url: str) -> tuple[str, str]:
     return "", ""
 
 
+README_MARKER_START = "<!-- REGISTRY:content -->"
+README_MARKER_END = "<!-- /REGISTRY:content -->"
+
+
+def update_readme(readme_path: Path, content: str) -> bool:
+    if not readme_path.exists():
+        print(f"{readme_path} not found.", file=sys.stderr)
+        print(f'Create a README.md and add these markers where you want the registry content:\n\n{README_MARKER_START}\n{README_MARKER_END}', file=sys.stderr)
+        return False
+
+    existing = readme_path.read_text(encoding="utf-8")
+    if README_MARKER_START not in existing or README_MARKER_END not in existing:
+        print(f"Markers not found in {readme_path}.", file=sys.stderr)
+        print(f"\nAdd these markers to your README.md where you want the registry content to appear:\n\n{README_MARKER_START}\n{README_MARKER_END}", file=sys.stderr)
+        return False
+
+    before = existing[:existing.index(README_MARKER_START) + len(README_MARKER_START)]
+    after = existing[existing.index(README_MARKER_END):]
+    updated = before + "\n" + content + "\n" + after
+    readme_path.write_text(updated, encoding="utf-8")
+    print(f"Updated {readme_path}")
+    return True
+
+
 def generate_readme(data: dict, working_dir: str | None = None) -> str:
     repo_url = _get_git_remote_url(working_dir)
     head_sha = _get_git_head_sha(working_dir)
@@ -804,11 +828,19 @@ def generate_readme(data: dict, working_dir: str | None = None) -> str:
 
     packages = data.get("packages", {})
     pkg_names = list(packages.keys())
-    vcpkg_names = []
+
+    xmake_pkgs = []
+    vcpkg_pkgs = []
     for name, pkg in packages.items():
         registries = get_package_registries(pkg)
+        repo = pkg.get("repo", "")
+        link = f"https://github.com/{repo}" if repo else ""
+        if "xmake" in registries:
+            xmake_pkgs.append((name, link))
         if "vcpkg" in registries:
-            vcpkg_names.append(vcpkg_port_name(name))
+            vcpkg_pkgs.append((vcpkg_port_name(name), link))
+
+    vcpkg_names = [name for name, _ in vcpkg_pkgs]
 
     xmake_registry_name = org or "my-registry"
     git_url = f"{repo_url}.git" if repo_url else "https://github.com/your-user/your-registry.git"
@@ -817,9 +849,8 @@ def generate_readme(data: dict, working_dir: str | None = None) -> str:
     example_pkg = pkg_names[0] if pkg_names else "some-package"
     example_vcpkg = vcpkg_names[0] if vcpkg_names else "some-package"
 
-    pkg_list_md = ""
-    if pkg_names:
-        pkg_list_md = "\n".join(f"- `{name}`" for name in pkg_names)
+    xmake_pkg_list = "\n".join(f"- [`{name}`]({link})" for name, link in xmake_pkgs) if xmake_pkgs else ""
+    vcpkg_pkg_list = "\n".join(f"- [`{name}`]({link})" for name, link in vcpkg_pkgs) if vcpkg_pkgs else ""
 
     def _json_list(items, indent_spaces):
         if not items:
@@ -839,7 +870,6 @@ This is a [`vcpkg`](https://vcpkg.io/) and [`xmake`](https://xmake.io/) C++ pack
 
 ---
 
-- [Packages](#packages)
 - [Build Tool Configuration](#build-tool-configuration)
   - [`xmake`](#xmake)
   - [`vcpkg`](#vcpkg)
@@ -849,13 +879,11 @@ This is a [`vcpkg`](https://vcpkg.io/) and [`xmake`](https://xmake.io/) C++ pack
 
 ---
 
-# Packages
-
-{pkg_list_md}
-
 # Build Tool Configuration
 
 ## `xmake`
+
+{xmake_pkg_list}
 
 Configuring `xmake` to use this package registry couldn't be easier:
 
@@ -871,6 +899,8 @@ target("my-project")
 ```
 
 ## `vcpkg`
+
+{vcpkg_pkg_list}
 
 Custom registries for `vcpkg` are a bit more involved, but still easy to set up.
 
@@ -1018,7 +1048,11 @@ def build_parser() -> argparse.ArgumentParser:
     sc_parser.add_argument("values", nargs="+", help="Config key=value pairs (e.g. build_tests=false)")
 
     # readme
-    subparsers.add_parser("readme", help="Generate a README snippet for consumers of this registry.")
+    readme_parser = subparsers.add_parser("readme", help="Generate a README snippet for consumers of this registry.")
+    readme_parser.add_argument(
+        "--update", action="store_true",
+        help="Update README.md in place between <!-- REGISTRY:content --> markers",
+    )
 
     # self-update
     subparsers.add_parser("self-update", help="Update registry.py to the latest version from GitHub.")
@@ -1051,7 +1085,12 @@ def main(argv: list[str] | None = None):
     if args.command == "readme":
         data = load_registry(registry_path)
         root = str(registry_path.parent) if registry_path.parent != Path() else None
-        print(generate_readme(data, working_dir=root))
+        content = generate_readme(data, working_dir=root)
+        if args.update:
+            readme_path = registry_path.parent / "README.md"
+            update_readme(readme_path, content)
+        else:
+            print(content)
         return
 
     if args.command == "self-update":
