@@ -736,18 +736,19 @@ def _default_fetch(kind: str, **kwargs) -> str | dict:
     raise ValueError(f"Unknown fetch kind: {kind}")
 
 
-SELF_UPDATE_URL = "https://raw.githubusercontent.com/BuildWithCollab/cpp-package-registry-util/main/registry.py"
+SELF_UPDATE_REPO = "BuildWithCollab/cpp-package-registry-util"
+SELF_UPDATE_PATH = "registry.py"
 
 
 def self_update() -> None:
-    import time
-    url = f"{SELF_UPDATE_URL}?nocache={int(time.time())}"
+    url = f"https://api.github.com/repos/{SELF_UPDATE_REPO}/contents/{SELF_UPDATE_PATH}?ref=main"
     try:
-        with urlopen(_github_request(url)) as response:
-            new_content = response.read()
-    except HTTPError as e:
-        print(f"Failed to download update ({e.code}).", file=sys.stderr)
-        sys.exit(1)
+        data = _github_fetch_json(url, context="self-update")
+    except SystemExit:
+        print("Failed to check for updates.", file=sys.stderr)
+        return
+    import base64
+    new_content = base64.b64decode(data["content"])
 
     script_path = Path(__file__).resolve()
     old_content = script_path.read_bytes()
