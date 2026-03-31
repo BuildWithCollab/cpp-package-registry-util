@@ -118,6 +118,17 @@ class TestLuaHelpers:
         assert_that(result).contains('add_deps("boost"')
         assert_that(result).contains("configs = { filesystem = true }")
 
+    def test_format_xmake_dep_with_version(self):
+        dep = {"name": "collab-core", "version": "1.x"}
+        result = _format_xmake_dep(dep)
+        assert_that(result).is_equal_to('    add_deps("collab-core 1.x")')
+
+    def test_format_xmake_dep_with_version_and_configs(self):
+        dep = {"name": "boost", "version": ">=1.80", "configs": {"filesystem": True}}
+        result = _format_xmake_dep(dep)
+        assert_that(result).contains('add_deps("boost >=1.80"')
+        assert_that(result).contains("filesystem = true")
+
 
 class TestGenerateXmakeLua:
     def test_basic_with_dashes(self):

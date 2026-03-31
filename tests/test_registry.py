@@ -342,6 +342,18 @@ class TestCLI:
         assert_that(data["packages"]["my-lib"]).does_not_contain_key("dependencies")
         assert_that(data["packages"]["my-lib"]["vcpkg-dependencies"]).is_equal_to(["platform-folders"])
 
+    def test_add_dep_with_version_via_cli(self, tmp_path):
+        from registry import main
+
+        registry_file = tmp_path / "registry.json"
+        main(["-f", str(registry_file), "add", "my-lib", "user/my-lib"])
+        main(["-f", str(registry_file), "add-dep", "my-lib", "collab-core", "-v", "1.x"])
+
+        data = json.loads(registry_file.read_text())
+        dep = data["packages"]["my-lib"]["dependencies"][0]
+        assert_that(dep["name"]).is_equal_to("collab-core")
+        assert_that(dep["version"]).is_equal_to("1.x")
+
     def test_remove_dep_xmake_only_via_cli(self, tmp_path):
         from registry import main
 
@@ -386,6 +398,19 @@ class TestAddDependency:
         data = add_dependency(registry_with_one_package, "some-lib", "boost", configs={"filesystem": True})
         dep = data["packages"]["some-lib"]["dependencies"][0]
         assert_that(dep["name"]).is_equal_to("boost")
+        assert_that(dep["configs"]["filesystem"]).is_true()
+
+    def test_add_with_version(self, registry_with_one_package):
+        data = add_dependency(registry_with_one_package, "some-lib", "collab-core", version="1.x")
+        dep = data["packages"]["some-lib"]["dependencies"][0]
+        assert_that(dep["name"]).is_equal_to("collab-core")
+        assert_that(dep["version"]).is_equal_to("1.x")
+
+    def test_add_with_version_and_configs(self, registry_with_one_package):
+        data = add_dependency(registry_with_one_package, "some-lib", "boost", version=">=1.80", configs={"filesystem": True})
+        dep = data["packages"]["some-lib"]["dependencies"][0]
+        assert_that(dep["name"]).is_equal_to("boost")
+        assert_that(dep["version"]).is_equal_to(">=1.80")
         assert_that(dep["configs"]["filesystem"]).is_true()
 
     def test_add_duplicate_exits(self, registry_with_one_package):

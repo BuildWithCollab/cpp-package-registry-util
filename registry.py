@@ -167,7 +167,7 @@ def _deps_key(registry: str | None = None) -> str:
     return "dependencies"
 
 
-def add_dependency(data: dict, name: str, dep_name: str, configs: dict | None = None, registry: str | None = None) -> dict:
+def add_dependency(data: dict, name: str, dep_name: str, configs: dict | None = None, registry: str | None = None, version: str | None = None) -> dict:
     packages = data.get("packages", {})
     if name not in packages:
         print(f"Package '{name}' not found.", file=sys.stderr)
@@ -179,8 +179,13 @@ def add_dependency(data: dict, name: str, dep_name: str, configs: dict | None = 
         if existing_name == dep_name:
             print(f"Dependency '{dep_name}' already exists in '{key}' for '{name}'.", file=sys.stderr)
             sys.exit(1)
-    if configs:
-        deps.append({"name": dep_name, "configs": configs})
+    if configs or version:
+        entry = {"name": dep_name}
+        if version:
+            entry["version"] = version
+        if configs:
+            entry["configs"] = configs
+        deps.append(entry)
     else:
         deps.append(dep_name)
     return data
@@ -343,10 +348,12 @@ def _format_xmake_dep(dep) -> str:
     if isinstance(dep, str):
         return f'    add_deps("{dep}")'
     name = dep["name"]
+    version = dep.get("version", "")
     configs = dep.get("configs", {})
+    name_str = f"{name} {version}" if version else name
     if configs:
-        return f'    add_deps("{name}", {{ configs = {_lua_value(configs)} }})'
-    return f'    add_deps("{name}")'
+        return f'    add_deps("{name_str}", {{ configs = {_lua_value(configs)} }})'
+    return f'    add_deps("{name_str}")'
 
 
 MARKER_START = "-- [[ GENERATED:{section} ]]"
@@ -540,7 +547,8 @@ def generate_vcpkg_json(
         ],
     }
     for dep in (dependencies or []):
-        vcpkg_json["dependencies"].append(vcpkg_port_name(dep))
+        dep_name = dep if isinstance(dep, str) else dep["name"]
+        vcpkg_json["dependencies"].append(vcpkg_port_name(dep_name))
     return vcpkg_json
 
 
@@ -1032,6 +1040,7 @@ def build_parser() -> argparse.ArgumentParser:
     ad_parser.add_argument("name", help="Package name")
     ad_parser.add_argument("dep", help="Dependency name")
     ad_parser.add_argument("configs", nargs="*", help="Config key=value pairs (e.g. filesystem=true)")
+    ad_parser.add_argument("-v", "--version", dest="dep_version", help="Version constraint (e.g. 1.x, >=2.0)")
     ad_group = ad_parser.add_mutually_exclusive_group()
     ad_group.add_argument("--xmake", action="store_true", help="Add as xmake-only dependency")
     ad_group.add_argument("--vcpkg", action="store_true", help="Add as vcpkg-only dependency")
@@ -1152,7 +1161,7 @@ def main(argv: list[str] | None = None):
             k, v = parse_kv_pair(pair)
             configs[k] = v
         reg = "xmake" if args.xmake else ("vcpkg" if args.vcpkg else None)
-        add_dependency(data, args.name, args.dep, configs=configs or None, registry=reg)
+        add_dependency(data, args.name, args.dep, configs=configs or None, registry=reg, version=args.dep_version)
 
     elif args.command == "remove-dep":
         reg = "xmake" if args.xmake else ("vcpkg" if args.vcpkg else None)
