@@ -740,7 +740,8 @@ SELF_UPDATE_URL = "https://raw.githubusercontent.com/BuildWithCollab/cpp-package
 
 
 def self_update() -> None:
-    url = SELF_UPDATE_URL
+    import time
+    url = f"{SELF_UPDATE_URL}?nocache={int(time.time())}"
     try:
         with urlopen(_github_request(url)) as response:
             new_content = response.read()
