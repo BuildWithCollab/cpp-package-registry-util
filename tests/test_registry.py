@@ -15,6 +15,7 @@ from registry import (
     remove_version,
     save_registry,
     set_config,
+    show_package,
 )
 
 
@@ -185,6 +186,57 @@ class TestListPackages:
     def test_list_nonexistent_package_exits(self, empty_registry):
         with pytest.raises(SystemExit):
             list_packages(empty_registry, "nope")
+
+
+# --- show_package ---
+
+
+class TestShowPackage:
+    def test_show_all_fields(self, capsys):
+        data = {
+            "packages": {
+                "my-lib": {
+                    "repo": "user/my-lib",
+                    "branch": "develop",
+                    "registries": ["xmake"],
+                    "header-only": True,
+                    "versions": ["v1.0.0", "v2.0.0"],
+                    "dependencies": ["fmt", {"name": "boost", "version": ">=1.80", "configs": {"filesystem": True}}],
+                    "xmake-dependencies": ["platformfolders"],
+                    "vcpkg-dependencies": ["platform-folders"],
+                    "xmake-config": {"build_tests": False},
+                    "options": ["BUILD_EXAMPLE=OFF"],
+                }
+            }
+        }
+        show_package(data, "my-lib")
+        output = capsys.readouterr().out
+        assert_that(output).contains("repo: user/my-lib")
+        assert_that(output).contains("branch: develop")
+        assert_that(output).contains("registries: xmake")
+        assert_that(output).contains("header-only: true")
+        assert_that(output).contains("v1.0.0")
+        assert_that(output).contains("v2.0.0")
+        assert_that(output).contains("fmt")
+        assert_that(output).contains("boost >=1.80")
+        assert_that(output).contains("filesystem")
+        assert_that(output).contains("platformfolders")
+        assert_that(output).contains("platform-folders")
+        assert_that(output).contains("build_tests")
+        assert_that(output).contains("BUILD_EXAMPLE=OFF")
+
+    def test_show_minimal(self, capsys):
+        data = {"packages": {"my-lib": {"repo": "user/my-lib"}}}
+        show_package(data, "my-lib")
+        output = capsys.readouterr().out
+        assert_that(output).contains("repo: user/my-lib")
+        assert_that(output).contains("registries: vcpkg, xmake")
+        assert_that(output).does_not_contain("dependencies")
+        assert_that(output).does_not_contain("xmake-config")
+
+    def test_show_nonexistent_exits(self, empty_registry):
+        with pytest.raises(SystemExit):
+            show_package(empty_registry, "nope")
 
 
 # --- CLI integration (via main) ---
