@@ -619,6 +619,40 @@ def generate_vcpkg_baseline(packages: dict[str, str]) -> dict:
 # --- generate orchestrator ---
 
 
+SHA256_CACHE_FILE = ".sha256-cache.json"
+
+
+def _load_sha256_cache(root: Path) -> dict:
+    cache_path = root / SHA256_CACHE_FILE
+    if cache_path.exists():
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def _save_sha256_cache(root: Path, cache: dict) -> None:
+    cache_path = root / SHA256_CACHE_FILE
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(cache, f, indent=2)
+        f.write("\n")
+
+
+def _cached_fetch(fetch_fn, cache: dict):
+    def wrapper(kind, **kwargs):
+        if kind == "tarball_sha256":
+            key = f"{kwargs['repo']}@{kwargs['version']}"
+            if key in cache:
+                wrapper._cache_hit = True
+                return cache[key]
+            wrapper._cache_hit = False
+            result = fetch_fn(kind, **kwargs)
+            cache[key] = result
+            return result
+        return fetch_fn(kind, **kwargs)
+    wrapper._cache_hit = False
+    return wrapper
+
+
 def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True, overwrite: bool = False, only_package: str | None = None) -> None:
     if fetch_fn is None:
         fetch_fn = _default_fetch
@@ -627,6 +661,9 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True, overwri
     if not packages:
         print("No packages to generate.")
         return
+
+    sha256_cache = _load_sha256_cache(root)
+    fetch_fn = _cached_fetch(fetch_fn, sha256_cache)
 
     working_dir = str(root)
     baseline_entries = {}
@@ -678,12 +715,17 @@ def generate(data: dict, root: Path, fetch_fn=None, commit: bool = True, overwri
         if commit:
             git_exec(["add", str(baseline_path)], working_dir)
 
+    _save_sha256_cache(root, sha256_cache)
+
 
 def _generate_xmake(root, name, repo, description, versions, dependencies, header_only, fetch_fn, license_id="", xmake_config=None, overwrite=False):
     version_hashes = {}
     for version in versions:
-        print(f"  xmake: fetching SHA256 for {version}...")
         sha256 = fetch_fn("tarball_sha256", repo=repo, version=version)
+        if hasattr(fetch_fn, '_cache_hit') and fetch_fn._cache_hit:
+            print(f"  xmake: {version} (cached)")
+        else:
+            print(f"  xmake: fetched SHA256 for {version}")
         version_hashes[version] = sha256
 
     pkg_dir = xmake_package_dir(root, name)
