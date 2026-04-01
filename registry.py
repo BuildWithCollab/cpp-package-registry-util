@@ -140,6 +140,59 @@ def list_packages(data: dict, name: str | None = None) -> None:
             print(f"  {pkg_name} ({pkg['repo']}) [{', '.join(registries)}] ({version_count} versions)")
 
 
+def _format_dep_display(dep) -> str:
+    if isinstance(dep, str):
+        return dep
+    name = dep["name"]
+    parts = [name]
+    if "version" in dep:
+        parts[0] = f"{name} {dep['version']}"
+    if "configs" in dep:
+        configs = ", ".join(f"{k}={v}" for k, v in dep["configs"].items())
+        parts.append(f"({configs})")
+    return " ".join(parts)
+
+
+def show_package(data: dict, name: str) -> None:
+    packages = data.get("packages", {})
+    if name not in packages:
+        print(f"Package '{name}' not found.", file=sys.stderr)
+        sys.exit(1)
+    pkg = packages[name]
+
+    print(f"{name}")
+    print(f"  repo: {pkg['repo']}")
+    if "branch" in pkg:
+        print(f"  branch: {pkg['branch']}")
+    registries = pkg.get("registries", list(VALID_REGISTRIES))
+    print(f"  registries: {', '.join(registries)}")
+    if pkg.get("header-only"):
+        print(f"  header-only: true")
+
+    versions = pkg.get("versions", [])
+    if versions:
+        print(f"  versions:")
+        for v in versions:
+            print(f"    - {v}")
+
+    for key, label in [("dependencies", "dependencies"), ("xmake-dependencies", "xmake-dependencies"), ("vcpkg-dependencies", "vcpkg-dependencies")]:
+        deps = pkg.get(key, [])
+        if deps:
+            print(f"  {label}:")
+            for d in deps:
+                print(f"    - {_format_dep_display(d)}")
+
+    if pkg.get("xmake-config"):
+        print(f"  xmake-config:")
+        for k, v in pkg["xmake-config"].items():
+            print(f"    {k}: {v}")
+
+    if pkg.get("options"):
+        print(f"  options:")
+        for o in pkg["options"]:
+            print(f"    - {o}")
+
+
 def parse_kv_pair(s: str):
     if "=" not in s:
         return s, True
@@ -1035,6 +1088,10 @@ def build_parser() -> argparse.ArgumentParser:
     ls_parser = subparsers.add_parser("list", help="List packages or versions.")
     ls_parser.add_argument("name", nargs="?", help="Package name (omit to list all)")
 
+    # show
+    show_parser = subparsers.add_parser("show", help="Show full details for a package.")
+    show_parser.add_argument("name", help="Package name")
+
     # add-dep
     ad_parser = subparsers.add_parser("add-dep", help="Add a dependency to a package.")
     ad_parser.add_argument("name", help="Package name")
@@ -1111,6 +1168,11 @@ def main(argv: list[str] | None = None):
     if args.command == "list":
         data = load_registry(registry_path)
         list_packages(data, args.name)
+        return
+
+    if args.command == "show":
+        data = load_registry(registry_path)
+        show_package(data, args.name)
         return
 
     if args.command == "generate":
