@@ -1239,8 +1239,6 @@ def main(argv: list[str] | None = None):
         data = load_registry(registry_path)
         root = registry_path.parent
         generate(data, root, commit=not args.no_commit, overwrite=args.overwrite, only_package=args.name)
-        if not args.no_commit:
-            git_exec(["commit", "--amend", "--no-edit"], str(root))
         print("Done.")
         return
 
