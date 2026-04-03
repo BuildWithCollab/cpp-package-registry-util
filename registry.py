@@ -768,52 +768,70 @@ def _generate_vcpkg(
         for entry in vdata.get("versions", []):
             existing_versions[entry["version-string"]] = entry["git-tree"]
 
-    version_entries = []
-
+    # Resolve all version-strings and find which need new git-trees
+    version_infos = []
     for version in versions:
-        print(f"  vcpkg: processing {version}...")
         commit_info = fetch_fn("commit_info", repo=repo, ref=version)
         vs = vcpkg_version_string(commit_info["date"], commit_info["sha"])
+        version_infos.append({"version": version, "vs": vs, "sha": commit_info["sha"]})
 
-        # Always regenerate port files (deps or description may have changed)
-        port_dir = vcpkg_port_dir(root, name)
-        port_dir.mkdir(parents=True, exist_ok=True)
+    # Reuse existing git-trees for already-tracked versions
+    version_entries = []
+    needs_commit = False
+    latest_info = version_infos[-1]
 
-        portfile = generate_portfile_cmake(
-            repo, commit_info["sha"], header_only=header_only, options=options,
-        )
-        portfile_path = port_dir / "portfile.cmake"
-        vcpkg_json_path = port_dir / "vcpkg.json"
-
-        new_portfile = portfile
-        new_vcpkg_json = json.dumps(generate_vcpkg_json(name, description, vs, dependencies), indent=2)
-
-        # Check if files actually changed
-        old_portfile = portfile_path.read_text(encoding="utf-8") if portfile_path.exists() else ""
-        old_vcpkg_json = vcpkg_json_path.read_text(encoding="utf-8") if vcpkg_json_path.exists() else ""
-        files_changed = (new_portfile != old_portfile) or (new_vcpkg_json != old_vcpkg_json)
-
-        portfile_path.write_text(new_portfile, encoding="utf-8")
-        vcpkg_json_path.write_text(new_vcpkg_json, encoding="utf-8")
-
-        if vs in existing_versions and not files_changed:
-            print(f"  vcpkg: {vs} already tracked, no changes")
+    for info in version_infos:
+        vs = info["vs"]
+        if vs in existing_versions:
+            print(f"  vcpkg: {vs} (tracked)")
             version_entries.append({"version-string": vs, "git-tree": existing_versions[vs]})
-            continue
-
-        if vs in existing_versions and files_changed:
-            print(f"  vcpkg: {vs} port files changed, updating git-tree")
-
-        pname = vcpkg_port_name(name)
-        if commit:
-            git_exec(["add", f"ports/{pname}"], working_dir)
-            git_exec(["commit", "-m", f"Update {pname} to {vs}"], working_dir)
-            tree_sha = git_tree_sha_for_path(f"ports/{pname}", working_dir)
-            print(f"  vcpkg: git-tree {tree_sha}")
         else:
-            tree_sha = "no-commit-mode"
+            # New version — we'll generate port files for it below
+            print(f"  vcpkg: {vs} (new)")
+            version_entries.append({"version-string": vs, "git-tree": None})
+            needs_commit = True
 
-        version_entries.append({"version-string": vs, "git-tree": tree_sha})
+    # Always generate port files for the latest version (deps/description may have changed)
+    port_dir = vcpkg_port_dir(root, name)
+    port_dir.mkdir(parents=True, exist_ok=True)
+    portfile_path = port_dir / "portfile.cmake"
+    vcpkg_json_path = port_dir / "vcpkg.json"
+
+    new_portfile = generate_portfile_cmake(
+        repo, latest_info["sha"], header_only=header_only, options=options,
+    )
+    new_vcpkg_json = json.dumps(
+        generate_vcpkg_json(name, description, latest_info["vs"], dependencies), indent=2
+    )
+
+    old_portfile = portfile_path.read_text(encoding="utf-8") if portfile_path.exists() else ""
+    old_vcpkg_json = vcpkg_json_path.read_text(encoding="utf-8") if vcpkg_json_path.exists() else ""
+    if (new_portfile != old_portfile) or (new_vcpkg_json != old_vcpkg_json):
+        needs_commit = True
+
+    if not needs_commit:
+        print(f"  vcpkg: no changes")
+        # Still need to populate version_entries for baseline
+        baseline_entries[vcpkg_port_name(name)] = {"baseline": latest_info["vs"], "port-version": 0}
+        return
+
+    portfile_path.write_text(new_portfile, encoding="utf-8")
+    vcpkg_json_path.write_text(new_vcpkg_json, encoding="utf-8")
+
+    # Single commit for port files, then get git-tree for any new versions
+    pname = vcpkg_port_name(name)
+    if commit:
+        git_exec(["add", f"ports/{pname}"], working_dir)
+        git_exec(["commit", "-m", f"Update {pname}"], working_dir)
+        tree_sha = git_tree_sha_for_path(f"ports/{pname}", working_dir)
+        print(f"  vcpkg: git-tree {tree_sha}")
+    else:
+        tree_sha = "no-commit-mode"
+
+    # Fill in git-tree for any new versions (they all get the current tree)
+    for entry in version_entries:
+        if entry["git-tree"] is None:
+            entry["git-tree"] = tree_sha
 
     # Write versions file
     latest_vs = version_entries[-1]["version-string"]

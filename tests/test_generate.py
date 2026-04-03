@@ -724,7 +724,7 @@ class TestGenerateIdempotent:
         output = capsys.readouterr().out
         assert_that(output).contains("no changes")
 
-    def test_vcpkg_regenerates_when_deps_change(self, tmp_path, capsys):
+    def test_vcpkg_regenerates_when_deps_change(self, tmp_path):
         data = {
             "packages": {
                 "my-lib": {
@@ -740,8 +740,6 @@ class TestGenerateIdempotent:
         # Change deps and regenerate
         data["packages"]["my-lib"]["dependencies"] = ["new-dep"]
         generate(data, tmp_path, fetch_fn=make_fake_fetch(), commit=False)
-        output = capsys.readouterr().out
-        assert_that(output).contains("port files changed")
 
         # Verify the file was actually updated
         vcpkg_json = tmp_path / "ports" / "my-lib" / "vcpkg.json"
